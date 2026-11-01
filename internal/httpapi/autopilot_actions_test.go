@@ -126,3 +126,73 @@ func TestAutopilotOperatorActions(t *testing.T) {
 		t.Fatalf("disabled-autopilot action status = %d, want 409 (body %s)", rr2.Code, rr2.Body.String())
 	}
 }
+
+// TestAutopilotActionBodyIsBounded pins the body limit on the operator action
+// handler: it decodes a single short field, so an oversized body must be
+// refused before the decoder buffers it. Before the bound existed this handler
+// was the only admin mutation in the package that decoded r.Body unbounded.
+func TestAutopilotActionBodyIsBounded(t *testing.T) {
+	// Same gateway shape as TestAutopilotOperatorActions: a canary controller
+	// must exist, or the handler answers 409 before it ever reads the body.
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.Decision.Mode = "local"
+	cfg.Decision.Provider = "policy"
+	cfg.Decision.Policy = "balanced"
+	cfg.Decision.TimeoutMS = 100
+	cfg.DecisionPolicies = []config.DecisionPolicyConfig{
+		makePolicyConfig("balanced", config.DecisionPolicyWeights{RouterBaseline: 1}, nil, 0),
+		makePolicyConfig("canary-bad", config.DecisionPolicyWeights{Latency: 1}, nil, 0),
+	}
+	cfg.Autopilot = config.AutopilotConfig{
+		Enabled:           true,
+		PolicyID:          "balanced",
+		CandidatePolicyID: "canary-bad",
+		CanaryPercent:     100,
+		MinSamples:        5,
+		MinPromoteSamples: 1000,
+		MaxErrorRate:      0.2,
+	}
+	cfg.CandidatePools = []config.CandidatePoolConfig{{ID: "pool1", Mode: "explicit", Deployments: []string{"p1/m1"}}}
+	cfg.RouteProfiles = []config.RouteProfileConfig{{ID: "rp1", CandidatePool: "pool1", DecisionPolicy: "balanced"}}
+	trueVal := true
+	cfg.VirtualEndpoints = []config.VirtualEndpointConfig{{ID: "ve1", PublicModel: "nexa-auto", RouteProfile: "rp1", Enabled: &trueVal, Protocols: []string{"openai"}}}
+	cfg.Providers = []config.ProviderConfig{
+		{ID: "p1", Type: "openai_compatible", BaseURL: "http://127.0.0.1:1", AuthMode: "none", Enabled: true, Models: []config.ModelConfig{{ID: "m1", Model: "model-a", Enabled: true, Weight: 1, Priority: 0}}},
+	}
+	cfg.Admin.APIKey = "autopilot-bound-admin-secret"
+	s := testGateway(t, cfg)
+	if s.autopilot == nil {
+		t.Fatal("controller not created; the body bound cannot be exercised")
+	}
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "http://gateway/admin/api/autopilot", strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("x-admin-key", cfg.Admin.APIKey)
+		rr := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rr, req)
+		return rr
+	}
+
+	// Control: a normal-sized action body is still accepted, so the bound did
+	// not break the endpoint.
+	if rr := post(`{"action":"evaluate"}`); rr.Code != http.StatusOK {
+		t.Fatalf("evaluate status = %d, want 200 (body %s)", rr.Code, rr.Body.String())
+	}
+
+	// 8 KiB of padding around a valid action exceeds the 4 KiB bound.
+	oversized := `{"action":"evaluate","pad":"` + strings.Repeat("x", 8192) + `"}`
+	rr := post(oversized)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("oversized body status = %d, want 400", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "invalid JSON body") {
+		t.Fatalf("oversized body response = %s, want the generic invalid-JSON error", rr.Body.String())
+	}
+	// The refusal must not echo the payload or advertise the limit.
+	if strings.Contains(rr.Body.String(), "xxxx") || strings.Contains(rr.Body.String(), "4096") {
+		t.Fatalf("oversized body response leaks request details: %s", rr.Body.String())
+	}
+}
