@@ -2,11 +2,11 @@
 # Final release completion gate.
 #
 # Every product acceptance blocker (#646-#653) and the umbrella (#654) must be
-# CLOSED before a stable release may be published. A blocker that closed as
-# "completed" is accepted as-is. A blocker that closed any other way
-# (for example state_reason=not_planned) is accepted ONLY when the release
-# notes for the version being tagged carry an explicit, owner-approved
-# exclusion for it in docs/releases/<version>-exclusions.json.
+# CLOSED before a stable release may be published. For v0.25.0 only completed
+# closures with current provenance metadata are accepted, and no exclusions are
+# allowed. Independent review of the evidence remains mandatory. For other
+# versions, a non-completed closure may use the generic owner-approved,
+# version-scoped exclusion mechanism in docs/releases/<version>-exclusions.json.
 #
 # This is not a way to hide an open blocker:
 #   * an OPEN issue always fails the gate, excluded or not;
@@ -32,7 +32,15 @@ usage() {
 }
 
 version=""
-if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
+tag_ref=""
+if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+  tag_ref="${GITHUB_REF#refs/tags/}"
+  if [[ -n "${GITHUB_REF_NAME:-}" && "$GITHUB_REF_NAME" != "$tag_ref" ]]; then
+    echo "::error::Tag ref and ref name disagree; refusing to determine release policy." >&2
+    exit 2
+  fi
+  version="$tag_ref"
+elif [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
   version="${GITHUB_REF_NAME}"
 fi
 while (($#)); do
@@ -58,7 +66,7 @@ while (($#)); do
 done
 
 # A caller cannot override the actual v0.25.0 tag into a different policy.
-if [[ "${GITHUB_REF_NAME:-}" == "v0.25.0" && "$version" != "v0.25.0" ]]; then
+if [[ ( "${GITHUB_REF_NAME:-}" == "v0.25.0" || "$tag_ref" == "v0.25.0" ) && "$version" != "v0.25.0" ]]; then
   echo "::error::Cannot override the v0.25.0 completion-only release policy." >&2
   exit 2
 fi
@@ -83,6 +91,39 @@ if [[ "$version" == "v0.25.0" ]]; then
     --slurp 'length == 1 and (.[0] | type == "object" and .release == $v and (.exclusions | type == "array" and length == 0))' \
     "$exclusions_file" >/dev/null 2>&1; then
     echo "::error::v0.25.0 permits no exclusions; its manifest must be valid and empty." >&2
+    exit 1
+  fi
+  # jq accepts duplicate keys with last-value-wins semantics. Reject ambiguous
+  # JSON even when its final exclusions member appears empty.
+  if [[ -f "$exclusions_file" ]] && ! python3 - "$exclusions_file" <<'PYJSON'
+import json
+import sys
+
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate key")
+        result[key] = value
+    return result
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as file:
+        json.load(file, object_pairs_hook=unique)
+except (OSError, UnicodeError, ValueError):
+    sys.exit(1)
+PYJSON
+  then
+    echo "::error::v0.25.0 manifest is unreadable or has ambiguous JSON." >&2
+    exit 1
+  fi
+  # Release evidence is bound to the candidate at the current main tip, not
+  # merely an ancestor or PR merge commit. API/parser errors fail closed.
+  if [[ ! "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] ||
+     ! main_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" 2>/dev/null)" ||
+     ! main_sha="$(jq -er '.object | select(.type == "commit") | .sha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<<"$main_ref" 2>/dev/null)" ||
+     [[ "$main_sha" != "$GITHUB_SHA" ]]; then
+    echo "::error::v0.25.0 candidate SHA is not verifiably the current main tip." >&2
     exit 1
   fi
 fi
@@ -285,11 +326,19 @@ elif ((failed == 0)) && [[ -n "$exclusions_file" && -f "$exclusions_file" ]]; th
   # the manifest is irrelevant, and claiming "every blocker closed with
   # acceptance evidence" beside the ::error:: lines above would misreport the
   # release state in the one log an operator is most likely to skim.
-  echo "Note: ${exclusions_file} exists but every blocker closed with acceptance evidence; the manifest is not used."
+  if ((strict_v025)); then
+    echo "Note: ${exclusions_file} is empty; issue evidence metadata matched. Independent content review remains required."
+  else
+    echo "Note: ${exclusions_file} exists but every blocker closed with acceptance evidence; the manifest is not used."
+  fi
 fi
 
 if ((failed != 0)); then
-  echo "::error::Refusing to publish. Resolve every product acceptance blocker and complete issue #654 first (or record owner-approved exclusions in ${exclusions_file:-the release notes})." >&2
+  if ((strict_v025)); then
+    echo "::error::Refusing to publish v0.25.0. Complete every acceptance blocker and close #654 last; no exclusions are permitted." >&2
+  else
+    echo "::error::Refusing to publish. Resolve every product acceptance blocker and complete issue #654 first (or record owner-approved exclusions in ${exclusions_file:-the release notes})." >&2
+  fi
   exit 1
 fi
 

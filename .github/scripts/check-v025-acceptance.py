@@ -16,13 +16,40 @@ MARKER = "NEXAROUTE_ACCEPTANCE_V1\n"
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field: {key}")
+        result[key] = value
+    return result
+
+
 def get(repo, endpoint, paginate=False):
     args = ["gh", "api"]
     if paginate:
-        args += ["--paginate", "--slurp"]
+        # Older gh versions do not provide --slurp; --paginate emits one JSON
+        # array per page, concatenated. Decode every page, including the last.
+        args.append("--paginate")
     args.append(f"repos/{repo}/{endpoint}")
     raw = subprocess.check_output(args, text=True, stderr=subprocess.DEVNULL, timeout=30)
-    return json.loads(raw)
+    if not paginate:
+        return json.loads(raw, object_pairs_hook=unique_object)
+    decoder = json.JSONDecoder(object_pairs_hook=unique_object)
+    pages = []
+    pos = 0
+    while pos < len(raw):
+        while pos < len(raw) and raw[pos].isspace():
+            pos += 1
+        if pos == len(raw):
+            break
+        page, pos = decoder.raw_decode(raw, pos)
+        if not isinstance(page, list):
+            raise ValueError("invalid comments page")
+        pages.append(page)
+    if not pages:
+        raise ValueError("empty comments response")
+    return pages
 
 
 def verify(repo, issue, version, sha):
@@ -31,13 +58,19 @@ def verify(repo, issue, version, sha):
     pages = get(repo, f"issues/{issue}/comments?per_page=100", paginate=True)
     if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
         raise ValueError("invalid or incomplete comments response")
-    comments = [item for page in pages for item in page if isinstance(item, dict)]
+    comments = [item for page in pages for item in page]
+    if any(not isinstance(c, dict) or type(c.get("id")) is not int or c["id"] <= 0
+           or not isinstance(c.get("created_at"), str) or not re.fullmatch(
+               r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", c["created_at"])
+           or not isinstance(c.get("body"), str) or not isinstance(c.get("author_association"), str)
+           for c in comments):
+        raise ValueError("malformed issue comment response")
     records = [c for c in comments if isinstance(c.get("body"), str) and c["body"].startswith(MARKER)
                and c.get("author_association") in ("OWNER", "MEMBER")]
     if not records:
         raise ValueError("no authorized structured acceptance record")
     records.sort(key=lambda c: (c.get("created_at") or "", c.get("id") or 0))
-    record = json.loads(records[-1]["body"][len(MARKER):])
+    record = json.loads(records[-1]["body"][len(MARKER):], object_pairs_hook=unique_object)
     if not isinstance(record, dict) or type(record.get("issue")) is not int or record["issue"] != issue \
             or record.get("release") != version or record.get("commit") != sha or record.get("result") != "PASS":
         raise ValueError("missing, stale, mismatched or non-passing acceptance record")

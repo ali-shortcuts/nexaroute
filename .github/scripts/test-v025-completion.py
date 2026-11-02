@@ -12,9 +12,14 @@ GATE = ROOT / ".github/scripts/check-final-release-gate.sh"
 SHA = "0123456789abcdef0123456789abcdef01234567"
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, re, sys
+if "--slurp" in sys.argv: sys.exit(2)  # gh 2.23 compatibility
 path = sys.argv[-1]
 mode = os.environ.get("MODE", "pass")
 sha = os.environ["GITHUB_SHA"]
+if path.endswith("/git/ref/heads/main"):
+    if mode == "main-error": sys.exit(1)
+    print(json.dumps({"object": {"type": "commit", "sha": "b" * 40 if mode == "main-stale" else sha}}))
+    sys.exit(0)
 issue_match = re.search(r"/issues/(\d+)(/comments\?per_page=100)?$", path)
 if issue_match:
     issue = int(issue_match.group(1))
@@ -28,8 +33,10 @@ if issue_match:
         if mode == "missing-date" and issue == 646: closed_at = None
         print(json.dumps({"number": number, "state": state, "state_reason": reason, "closed_at": closed_at}))
     else:
+        if "--paginate" not in sys.argv: sys.exit(2)
+        if mode == "comment-error" and issue == 646: sys.exit(1)
         if mode == "missing" and issue == 646:
-            print("[[]]"); sys.exit(0)
+            print("[]"); sys.exit(0)
         rec = {"issue": issue, "release": "v0.25.0", "commit": sha, "result": "PASS",
                "run_id": 100000 + issue, "artifact_id": 200000 + issue, "summary": "fixture"}
         if mode == "stale" and issue == 646: rec["commit"] = "a" * 40
@@ -37,7 +44,12 @@ if issue_match:
         comment = {"id": issue, "created_at": "2026-11-01T00:00:00Z", "author_association": "OWNER",
                    "body": "NEXAROUTE_ACCEPTANCE_V1\n" + json.dumps(rec)}
         if mode == "unauthorized" and issue == 646: comment["author_association"] = "NONE"
-        print(json.dumps([[comment]]))
+        if mode == "multiple-pages": print("[]")
+        if mode == "bad-page" and issue == 646: print('{invalid')
+        if mode == "bad-comment" and issue == 646: print('[null]')
+        if mode == "duplicate-record" and issue == 646:
+            comment["body"] = 'NEXAROUTE_ACCEPTANCE_V1\n' + json.dumps(rec)[:-1] + ',"result":"PASS"}'
+        print(json.dumps([comment]))
     sys.exit(0)
 run = re.search(r"/actions/runs/(\d+)$", path)
 if run:
@@ -73,6 +85,7 @@ def main():
                    GITHUB_REPOSITORY="example/nexaroute", GH_TOKEN="fixture", GITHUB_SHA=SHA,
                    REAL_JQ=shutil.which("jq"))
         env.pop("GITHUB_REF_NAME", None)
+        env.pop("GITHUB_REF", None)
 
         def run(mode="pass", body=None, sha=SHA):
             if body is None:
@@ -86,6 +99,8 @@ def main():
         good_empty = json.dumps({"release": "v0.25.0", "exclusions": []})
         rc, out = run(body=good_empty)
         assert rc == 0, f"valid fixture should pass: {out}"
+        rc, out = run(mode="multiple-pages", body=good_empty)
+        assert rc == 0, f"paginated fixture should pass: {out}"
         entry = {"issue": 649, "reason": "fixture", "approved_by": "owner", "approved_at": "2026-11-01"}
         for label, value in [("signed", entry), ("unsigned", dict(entry, approved_by="", approved_at=""))]:
             rc, _ = run(mode="not-planned", body=json.dumps({"release": "v0.25.0", "exclusions": [value]}))
@@ -93,15 +108,21 @@ def main():
         rc, _ = run(body=json.dumps({"release": "v0.25.0", "exclusions": [entry]}))
         assert rc != 0, "signed exclusion passed even with closed issues"
         for mode in ("open", "not-planned", "api-error", "wrong-issue", "umbrella-first", "missing-date", "jq-error", "missing", "stale", "result-fail",
-                     "unauthorized", "run-error", "run-sha", "pr-run", "expired", "wrong-run"):
+                     "unauthorized", "bad-page", "bad-comment", "duplicate-record", "comment-error", "main-error", "main-stale", "run-error", "run-sha", "pr-run", "expired", "wrong-run"):
             rc, _ = run(mode=mode, body=good_empty)
             assert rc != 0, f"{mode} passed"
-        for body in ('{', '{"release":"v0.24.0","exclusions":[]}', '{"release":"v0.25.0"}', good_empty + good_empty):
+        for body in ('{', '{"release":"v0.24.0","exclusions":[]}', '{"release":"v0.25.0"}', good_empty + good_empty,
+                     '{"release":"v0.25.0","exclusions":[{}],"exclusions":[]}'):
             rc, _ = run(body=body)
             assert rc != 0, "invalid manifest passed"
         p = subprocess.run(["bash", str(GATE), "--version", "v9.9.9"], cwd=base / "work",
                            env=dict(env, GITHUB_REF_NAME="v0.25.0"), text=True, capture_output=True)
         assert p.returncode != 0, "actual v0.25.0 tag was overridden"
+        for tag_env in ({"GITHUB_REF": "refs/tags/v0.25.0"},
+                        {"GITHUB_REF": "refs/tags/v0.25.0", "GITHUB_REF_NAME": "v9.9.9"}):
+            p = subprocess.run(["bash", str(GATE), "--version", "v9.9.9"], cwd=base / "work",
+                               env=dict(env, **tag_env), text=True, capture_output=True)
+            assert p.returncode != 0, "actual tag ref bypassed strict policy"
         rc, _ = run(body=good_empty, sha="short")
         assert rc != 0, "invalid candidate SHA passed"
     print("v0.25.0 completion-only evidence policy PASS (offline fixtures)")

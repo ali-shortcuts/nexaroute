@@ -40,8 +40,7 @@ next action; existing fixture/local evidence is not external acceptance.
 
 Review and verify the latest #824 candidate, including the atomic store changes
 and changed custom-Store contract, before any merge. Compare #823's actual
-content and ancestry, preserve its useful work, then obtain the required owner
-policy/review decision. Re-fetch main and rerun checks after any authorized
+content and ancestry, preserve its useful work, then obtain the required independent review and merge-order decision. Re-fetch main and rerun checks after any authorized
 merge. Do not close #823 until every useful contribution is independently
 confirmed in main; do not close any issue without its real acceptance evidence.
 
@@ -50,5 +49,4 @@ The owner can enable the required Actions permission or run the documented
 commands in [RELEASE_BLOCKERS.md](../RELEASE_BLOCKERS.md) after provisioning
 and authorizing the systems above. Supply credentials only through an approved
 secret channel, never in this register or chat. The final release remains
-blocked until the required external evidence, exact-SHA checks and owner policy
-decisions exist.
+blocked until the required external evidence, exact-SHA checks and final owner approval exist.

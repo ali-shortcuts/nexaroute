@@ -92,6 +92,16 @@ GitHub closure timestamp strictly later than every individual issue. The
 generic version-scoped exclusion mechanism below is preserved for future
 versions and is **not** usable to bypass v0.25.0 acceptance.
 
+The v0.25.0 script additionally resolves `refs/heads/main` through the GitHub
+API and requires the candidate SHA to equal the current main tip; a missing,
+malformed or stale ref response blocks. A conflicting tag ref/name or attempt
+to override the v0.25.0 tag version is rejected. Recheck main immediately before
+release; the comparison is not an atomic lock on main. This script cannot
+prevent an authorized person or a historical tag workflow from publishing
+outside the current gate: repository tag/release permissions and operator
+controls are separately required. In particular, a tag pointing at an older
+ancestor can run that ancestor's older workflow/gate. Do not create such a tag.
+
 For each completed issue the gate requires a GitHub issue comment starting
 with `NEXAROUTE_ACCEPTANCE_V1` on its own line followed by one JSON object:
 `issue` (integer), `release` (`v0.25.0`), `commit` (exact 40-character SHA),
@@ -99,7 +109,9 @@ with `NEXAROUTE_ACCEPTANCE_V1` on its own line followed by one JSON object:
 nonblank `summary`. The latest structured record from an OWNER or MEMBER must
 match the candidate. The gate verifies that the run is a successful completed
 manual dispatch on that SHA, and the unexpired artifact belongs to that run
-and SHA. API failures, stale or missing records and parser errors fail closed.
+and SHA. All paginated issue-comment pages are parsed (including on older gh
+versions without `--slurp`); malformed pages, duplicate JSON keys, API failures,
+stale or missing records and parser errors fail closed.
 This metadata is **not proof** that the artifact contains genuine acceptance;
 an independent reviewer must read the artifact and verify every issue criterion,
 topology and authorization. GitHub Actions metadata read permission is needed;

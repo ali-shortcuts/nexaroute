@@ -31,7 +31,7 @@ acceptance command already exists: `nexaroute provider-accept`,
 
 ### Class A — the agent identity cannot dispatch workflows
 
-`gh workflow run` from this environment returns:
+A prior `gh workflow run` attempt from this environment returned:
 
 ```
 HTTP 403: Resource not accessible by integration
@@ -39,7 +39,7 @@ HTTP 403: Resource not accessible by integration
 ```
 
 All seven acceptance workflows are `workflow_dispatch`-only, and the GitHub App
-acting on this repository has read-only Actions permission. This blocks agent-initiated workflow dispatch; real systems, credentials and
+acting on this repository previously had read-only Actions permission (recheck current permissions). This blocks agent-initiated workflow dispatch; real systems, credentials and
 independent review are separate requirements.
 
 The permission is also why `.github/workflows/*` cannot be edited (a push that
@@ -112,6 +112,26 @@ gh workflow run independent-environment.yml --ref main
 # The three that need real credentials, only after the operator authorizes them:
 gh workflow run conformance-live-canary.yml --ref main -f preset=openai -f model=<model>
 ```
+
+**Candidate binding:** the commands above use the mutable name `main` because
+workflow dispatch requires a ref. First complete separately reviewed manifest
+preparation, freeze changes to main, and record `CANDIDATE_SHA`. Verify each
+run's `head_sha` equals that SHA, and re-check main before and after the runs;
+a changed main or mismatched SHA invalidates the run for this candidate. Do
+not reuse a PR merge checkout or an earlier main result. `MAIN` in the example
+is an observation, not proof that a later dispatch used it.
+
+**Provider budget and stop conditions:** before any canary, the account owner
+must specify in writing the provider, endpoint, models, maximum requests,
+maximum tokens, maximum currency spend and time window; configure an actual
+provider-side hard budget where available. If no enforceable ceiling exists,
+use an explicitly approved conservative request/token limit and monitoring or
+do not run. Stop immediately on approaching any limit, unexpected pricing,
+authentication or permission anomalies, rate limits outside the approved test,
+secret leakage, unexpected traffic, or a failed cleanup. Disable the test
+credential and roll back test-only routing/configuration as appropriate; record
+the stop and actual spend in the sanitized report. Never retry billable calls
+without fresh authorization. This document supplies no spend authorization.
 
 `k8s-live-acceptance.yml` refuses to run against a foreign `kubectl` context
 (#777), so it needs a runner that actually has a cluster.
