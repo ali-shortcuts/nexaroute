@@ -13,8 +13,8 @@ import (
 // persist of a cloned state) share exactly the same transition logic.
 // All methods assume the caller holds the store lock and operate on the
 // receiver in place; FileStore applies them to a clone and only swaps
-// the clone in after a successful persist, so a persist failure can
-// never leave memory ahead of disk.
+// it in after persistence succeeds. A post-rename durability error leaves
+// the instance unavailable until it is closed and reopened.
 type storeState struct {
 	drafts    map[string]Definition
 	revisions map[string][]PublishedDefinition

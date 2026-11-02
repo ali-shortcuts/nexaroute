@@ -31,6 +31,18 @@ Storage selection is a wiring decision, not a workflow field:
 PostgreSQL is the durable authority for multi-instance claims; the
 file store is single-host only; the memory store is test-only.
 
+A FileStore write that fails before rename leaves the prior state intact. If
+rename succeeds but opening or syncing the parent directory fails, the write
+returns `ErrFileStoreCommitUncertain`: it may be present, but durability is
+unknown. The instance refuses further reads and writes. Close it, investigate
+the underlying filesystem error, reopen, inspect the recovered state, and
+reconcile the operation before deciding whether to retry. Reopening does not
+prove the rename would survive a later crash after a failed directory sync.
+Empty or JSON-null existing store files are corrupt and require operator
+recovery; they are not treated as new stores. Closing is idempotent and all
+operations on a closed instance fail. Interprocess file locking is implemented
+only on Linux and Darwin; other platforms must not use concurrent file writers.
+
 ## API reference
 
 All admin routes require admin authentication (401 otherwise) and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -287,9 +288,13 @@ func TestContinue95NexaflowPGCorruptNegativeRevision(t *testing.T) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	defer db.Close()
+	raw, err := json.Marshal(def)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO nexaroute_workflow_revisions (definition_id, revision, content_hash, definition, status, published_by) VALUES ($1, -1, 'x', $2, 'published', 'tester')`,
-		def.ID, mustJSON(def)); err != nil {
+		def.ID, raw); err != nil {
 		t.Fatalf("insert negative revision: %v", err)
 	}
 	if _, err := store.Publish(ctx, def.ID, "tester"); err == nil || !strings.Contains(err.Error(), "corrupt negative revision") {

@@ -165,12 +165,12 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 	return nil
 }
 
-func mustJSON(v any) []byte {
+func encodeStoreJSON(v any) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return []byte("{}")
+		return nil, fmt.Errorf("nexaflow: encode postgres store JSON: %w", err)
 	}
-	return raw
+	return raw, nil
 }
 
 func (s *PostgresStore) SaveDraft(ctx context.Context, def Definition) error {
@@ -178,10 +178,14 @@ func (s *PostgresStore) SaveDraft(ctx context.Context, def Definition) error {
 		return errors.New("nexaflow: definition id is required")
 	}
 	canon := cloneDefinition(def)
-	_, err := s.db.ExecContext(ctx,
+	raw, err := encodeStoreJSON(canon)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO `+wfDefsTable+` (definition_id, draft, updated_at) VALUES ($1, $2, clock_timestamp())
 		 ON CONFLICT (definition_id) DO UPDATE SET draft = EXCLUDED.draft, updated_at = clock_timestamp()`,
-		def.ID, mustJSON(canon))
+		def.ID, raw)
 	return err
 }
 
@@ -302,6 +306,10 @@ func (s *PostgresStore) publish(ctx context.Context, definitionID, publishedBy, 
 	if errors.Is(err, sql.ErrNoRows) {
 		next = 1
 	}
+	encodedDraft, err := encodeStoreJSON(draft)
+	if err != nil {
+		return PublishedDefinition{}, err
+	}
 	now := time.Now()
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE `+wfRevsTable+` SET status = $1 WHERE definition_id = $2 AND status = $3`,
@@ -310,7 +318,7 @@ func (s *PostgresStore) publish(ctx context.Context, definitionID, publishedBy, 
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO `+wfRevsTable+` (definition_id, revision, content_hash, definition, status, published_by, published_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		definitionID, next, hash, mustJSON(draft), string(DefinitionPublished), publishedBy, now); err != nil {
+		definitionID, next, hash, encodedDraft, string(DefinitionPublished), publishedBy, now); err != nil {
 		return PublishedDefinition{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -461,6 +469,18 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 		run.State = RunCreated
 	}
 	run.Definition = cloneDefinition(run.Definition)
+	definitionJSON, err := encodeStoreJSON(run.Definition)
+	if err != nil {
+		return err
+	}
+	rolesJSON, err := encodeStoreJSON(run.PrincipalRoles)
+	if err != nil {
+		return err
+	}
+	inputJSON, err := encodeStoreJSON(deepCopyMap(run.Input))
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 	// The admission cap must be atomic across processes sharing
 	// this database: a transaction-scoped advisory lock serializes
@@ -488,8 +508,8 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO `+wfRunsTable+` (`+runColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-		run.ID, run.DefinitionID, run.Revision, mustJSON(run.Definition), string(run.State),
-		run.IdempotencyKey, run.Principal, mustJSON(run.PrincipalRoles), mustJSON(deepCopyMap(run.Input)),
+		run.ID, run.DefinitionID, run.Revision, definitionJSON, string(run.State),
+		run.IdempotencyKey, run.Principal, rolesJSON, inputJSON,
 		run.ErrorCode, run.Error, now, now, nullTime(run.StartedAt), nullTime(run.FinishedAt),
 		run.LeaseOwner, nullTime(run.LeaseUntil))
 	if err != nil {
@@ -675,6 +695,9 @@ func scanNode(row interface{ Scan(...any) error }) (NodeExecution, error) {
 }
 
 func (s *PostgresStore) AppendNodeExecution(ctx context.Context, exec NodeExecution) (NodeExecution, error) {
+	if _, err := encodeStoreJSON(exec); err != nil {
+		return NodeExecution{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return NodeExecution{}, err
@@ -703,9 +726,13 @@ func (s *PostgresStore) AppendNodeExecution(ctx context.Context, exec NodeExecut
 	now := time.Now()
 	exec.CreatedAt = now
 	exec.UpdatedAt = now
+	payload, err := encodeStoreJSON(exec)
+	if err != nil {
+		return NodeExecution{}, err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO `+wfNodesTable+` (run_id, node_id, attempt, payload, state, lease_owner, lease_until) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		exec.RunID, exec.NodeID, attempt, mustJSON(exec), string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
+		exec.RunID, exec.NodeID, attempt, payload, string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
 		return NodeExecution{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -715,6 +742,9 @@ func (s *PostgresStore) AppendNodeExecution(ctx context.Context, exec NodeExecut
 }
 
 func (s *PostgresStore) SaveNodeExecution(ctx context.Context, exec NodeExecution, expected NodeState) (NodeExecution, error) {
+	if _, err := encodeStoreJSON(exec); err != nil {
+		return NodeExecution{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return NodeExecution{}, err
@@ -766,9 +796,13 @@ func (s *PostgresStore) SaveNodeExecution(ctx context.Context, exec NodeExecutio
 		exec.FinishedAt = now
 	}
 	exec.UpdatedAt = now
+	payload, err := encodeStoreJSON(exec)
+	if err != nil {
+		return NodeExecution{}, err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE `+wfNodesTable+` SET payload = $4, state = $5, lease_owner = $6, lease_until = $7 WHERE run_id = $1 AND node_id = $2 AND attempt = $3`,
-		exec.RunID, exec.NodeID, exec.Attempt, mustJSON(exec), string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
+		exec.RunID, exec.NodeID, exec.Attempt, payload, string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
 		return NodeExecution{}, err
 	}
 	if err := tx.Commit(); err != nil {

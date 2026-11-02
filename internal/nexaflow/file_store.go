@@ -5,34 +5,73 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
 
+// ErrFileStoreCommitUncertain means a rename succeeded but directory sync
+// did not. The operation may have committed; do not blindly retry it. Close
+// the store, reopen it, and reconcile against the recovered state.
+var ErrFileStoreCommitUncertain = errors.New("nexaflow: file store commit uncertain; close and reopen")
+
+type fileStoreTemp interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+	Name() string
+}
+
+type fileStoreDir interface {
+	Sync() error
+	Close() error
+}
+
+type fileStoreFS struct {
+	createTemp  func(string, string) (fileStoreTemp, error)
+	rename      func(string, string) error
+	openDir     func(string) (fileStoreDir, error)
+	releaseLock func(*os.File) error
+}
+
+func defaultFileStoreFS() fileStoreFS {
+	return fileStoreFS{
+		createTemp:  func(dir, pattern string) (fileStoreTemp, error) { return os.CreateTemp(dir, pattern) },
+		rename:      os.Rename,
+		openDir:     func(path string) (fileStoreDir, error) { return os.Open(path) },
+		releaseLock: releaseFileLock,
+	}
+}
+
 // FileStore is the durable single-instance Store implementation. It
 // keeps the whole dataset in memory (behind the same transition logic
 // as MemoryStore) and persists it to one JSON document after every
 // mutation, using the control-plane file-store discipline: write a temp
 // file in the same directory, fsync it, rename over the target, fsync
-// the directory. A mutation whose persist fails returns the persist
-// error and leaves the previous state in place, in memory and on disk,
-// so a failed write can never leave memory ahead of disk.
+// the directory. Before rename, persist errors leave the old state intact.
+// After rename, directory open or sync errors make the commit uncertain: the
+// new state may be on disk but its durability is not established. The store
+// rejects further reads and writes until closed and reopened, so callers must
+// reconcile the operation against reloaded state before retrying. Reopening
+// observes the file that exists at that time, not a guarantee against a later
+// crash after an unsuccessful directory sync.
 //
-// Single-writer scope: OpenFileStore takes an exclusive, non-blocking
-// flock on <path>.lock for the store's lifetime. A second live store
-// on the same path fails to open. The lock releases when the process
-// dies or Close is called, which is what makes restart recovery work:
-// a new process opening the same path sees the last persisted state.
-// Cross-process sharing beyond one writer is the PostgreSQL store's
-// job, not this file's.
+// On Linux and Darwin, OpenFileStore takes an exclusive non-blocking flock
+// on <path>.lock for the store's lifetime. On other platforms no interprocess
+// lock is implemented, so concurrent writers must not use the same path.
+// Cross-process sharing beyond one writer is the PostgreSQL store's job.
+// Close releases the lock and all later operations on this instance fail.
+
 type FileStore struct {
-	mu       sync.Mutex
-	path     string
-	lockFile *os.File
-	state    *storeState
-	Clock    func() time.Time
+	mu        sync.Mutex
+	path      string
+	lockFile  *os.File
+	state     *storeState
+	uncertain bool
+	fs        fileStoreFS
+	Clock     func() time.Time
 }
 
 // fileStateDoc is the on-disk shape of storeState. All fields are
@@ -150,29 +189,25 @@ func OpenFileStore(path string) (*FileStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	fs := &FileStore{path: path, lockFile: lockFile, state: newStoreState()}
+	fs := &FileStore{path: path, lockFile: lockFile, state: newStoreState(), fs: defaultFileStoreFS()}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			// Best-effort unlock on the error path: the read error is
-			// the returned error, and the release attempt closes the
-			// lock file either way, so no lock is leaked.
-			_ = releaseFileLock(lockFile)
-			return nil, fmt.Errorf("nexaflow: read file store: %w", err)
+			return nil, errors.Join(fmt.Errorf("nexaflow: read file store: %w", err), releaseFileLock(lockFile))
 		}
 		return fs, nil
 	}
 	if len(raw) == 0 {
-		return fs, nil
+		return nil, errors.Join(fmt.Errorf("nexaflow: corrupt file store %q: empty file", path), releaseFileLock(lockFile))
 	}
-	var doc fileStateDoc
+	var doc *fileStateDoc
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		// As above: the corruption error dominates; the release
-		// attempt closes the lock file either way.
-		_ = releaseFileLock(lockFile)
-		return nil, fmt.Errorf("nexaflow: corrupt file store %q: %w", path, err)
+		return nil, errors.Join(fmt.Errorf("nexaflow: corrupt file store %q: %w", path, err), releaseFileLock(lockFile))
 	}
-	fs.state = docToState(&doc)
+	if doc == nil {
+		return nil, errors.Join(fmt.Errorf("nexaflow: corrupt file store %q: null document", path), releaseFileLock(lockFile))
+	}
+	fs.state = docToState(doc)
 	return fs, nil
 }
 
@@ -183,7 +218,7 @@ func (s *FileStore) Close() error {
 	if s.lockFile == nil {
 		return nil
 	}
-	err := releaseFileLock(s.lockFile)
+	err := s.fs.releaseLock(s.lockFile)
 	s.lockFile = nil
 	return err
 }
@@ -195,64 +230,79 @@ func (s *FileStore) now() time.Time {
 	return time.Now()
 }
 
-// persist writes state atomically. It must be called with s.mu held.
-func (s *FileStore) persist(state *storeState) error {
+// persist reports whether rename succeeded, even when the directory could not
+// be synced. It must be called with s.mu held.
+func (s *FileStore) persist(state *storeState) (renamed bool, err error) {
 	raw, err := json.Marshal(state.toDoc())
 	if err != nil {
-		return fmt.Errorf("nexaflow: marshal file store: %w", err)
+		return false, fmt.Errorf("nexaflow: marshal file store: %w", err)
 	}
 	dir := filepath.Dir(s.path)
-	tmp, err := os.CreateTemp(dir, ".nexaflow-store-*")
+	tmp, err := s.fs.createTemp(dir, ".nexaflow-store-*")
 	if err != nil {
-		return fmt.Errorf("nexaflow: create file store temp: %w", err)
+		return false, fmt.Errorf("nexaflow: create file store temp: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if _, err := tmp.Write(raw); err != nil {
-		// The write error is returned and the deferred Remove
-		// deletes the temp file; the final Close below (on the
-		// success path) remains the checked one.
+	n, err := tmp.Write(raw)
+	if err == nil && n != len(raw) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
 		_ = tmp.Close()
-		return fmt.Errorf("nexaflow: write file store temp: %w", err)
+		return false, fmt.Errorf("nexaflow: write file store temp: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		// As above: the fsync error dominates and the temp file
-		// is removed by the deferred cleanup.
 		_ = tmp.Close()
-		return fmt.Errorf("nexaflow: fsync file store temp: %w", err)
+		return false, fmt.Errorf("nexaflow: fsync file store temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("nexaflow: close file store temp: %w", err)
+		return false, fmt.Errorf("nexaflow: close file store temp: %w", err)
 	}
 	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return fmt.Errorf("nexaflow: chmod file store temp: %w", err)
+		return false, fmt.Errorf("nexaflow: chmod file store temp: %w", err)
 	}
-	if err := os.Rename(tmpName, s.path); err != nil {
-		return fmt.Errorf("nexaflow: rename file store: %w", err)
+	if err := s.fs.rename(tmpName, s.path); err != nil {
+		return false, fmt.Errorf("nexaflow: rename file store: %w", err)
 	}
-	d, err := os.Open(dir)
+	d, err := s.fs.openDir(dir)
 	if err != nil {
-		return fmt.Errorf("nexaflow: open file store dir: %w", err)
+		return true, fmt.Errorf("nexaflow: open file store dir: %w", err)
 	}
 	defer d.Close()
 	if err := d.Sync(); err != nil {
-		return fmt.Errorf("nexaflow: fsync file store dir: %w", err)
+		return true, fmt.Errorf("nexaflow: fsync file store dir: %w", err)
+	}
+	return true, nil
+}
+
+// usable must be called with s.mu held.
+func (s *FileStore) usable() error {
+	if s.lockFile == nil {
+		return fmt.Errorf("nexaflow: file store: %w", os.ErrClosed)
+	}
+	if s.uncertain {
+		return ErrFileStoreCommitUncertain
 	}
 	return nil
 }
 
-// mutate applies fn to a clone of the state and persists the clone
-// before swapping it in. It requires s.mu and rejects writes after Close:
-// the path lock may by then belong to another FileStore instance.
+// mutate applies fn to a clone and persists before swapping it in. An error
+// after rename poisons this instance until it is closed and reopened.
 func (s *FileStore) mutate(fn func(st *storeState) error) error {
-	if s.lockFile == nil {
-		return fmt.Errorf("nexaflow: file store: %w", os.ErrClosed)
+	if err := s.usable(); err != nil {
+		return err
 	}
 	clone := s.state.clone()
 	if err := fn(clone); err != nil {
 		return err
 	}
-	if err := s.persist(clone); err != nil {
+	renamed, err := s.persist(clone)
+	if err != nil {
+		if renamed {
+			s.uncertain = true
+			return fmt.Errorf("%w: %w", ErrFileStoreCommitUncertain, err)
+		}
 		return err
 	}
 	s.state = clone
@@ -268,12 +318,18 @@ func (s *FileStore) SaveDraft(_ context.Context, def Definition) error {
 func (s *FileStore) GetDraft(_ context.Context, definitionID string) (Definition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return Definition{}, err
+	}
 	return s.state.getDraft(definitionID)
 }
 
 func (s *FileStore) ListDrafts(_ context.Context) ([]Definition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
 	return s.state.listDrafts(), nil
 }
 
@@ -293,11 +349,14 @@ func (s *FileStore) Publish(_ context.Context, definitionID, publishedBy string)
 }
 
 func (s *FileStore) PublishIfUnchanged(_ context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return PublishedDefinition{}, err
+	}
 	if expectedHash == "" {
 		return PublishedDefinition{}, ErrStateConflict
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var out PublishedDefinition
 	err := s.mutate(func(st *storeState) error {
 		rev, err := st.publishIfUnchanged(definitionID, publishedBy, expectedHash, s.now())
@@ -328,12 +387,18 @@ func (s *FileStore) SupersedeRevision(_ context.Context, definitionID string, re
 func (s *FileStore) GetRevision(_ context.Context, definitionID string, revision uint64) (PublishedDefinition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return PublishedDefinition{}, err
+	}
 	return s.state.getRevision(definitionID, revision)
 }
 
 func (s *FileStore) ListRevisions(_ context.Context, definitionID string) ([]PublishedDefinition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
 	return s.state.listRevisions(definitionID)
 }
 
@@ -346,12 +411,18 @@ func (s *FileStore) CreateRun(_ context.Context, run Run) error {
 func (s *FileStore) GetRun(_ context.Context, runID string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return Run{}, err
+	}
 	return s.state.getRun(runID)
 }
 
 func (s *FileStore) GetRunByIdempotency(_ context.Context, key string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return Run{}, err
+	}
 	return s.state.getRunByIdempotency(key)
 }
 
@@ -373,6 +444,9 @@ func (s *FileStore) UpdateRunState(_ context.Context, runID string, expected Run
 func (s *FileStore) ListRuns(_ context.Context, filter RunFilter) ([]Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
 	return s.state.listRuns(filter)
 }
 
@@ -424,6 +498,9 @@ func (s *FileStore) SaveNodeExecution(_ context.Context, exec NodeExecution, exp
 func (s *FileStore) GetNodeExecutions(_ context.Context, runID string) ([]NodeExecution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return nil, err
+	}
 	return s.state.getNodeExecutions(runID)
 }
 
@@ -467,5 +544,8 @@ func (s *FileStore) RecordApproval(_ context.Context, appr Approval) (Approval, 
 func (s *FileStore) GetApproval(_ context.Context, runID, nodeID string) (Approval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.usable(); err != nil {
+		return Approval{}, err
+	}
 	return s.state.getApproval(runID, nodeID)
 }
