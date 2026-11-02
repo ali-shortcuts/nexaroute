@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import sys
+from urllib.parse import parse_qs, urlsplit
 
 MARKER = "NEXAROUTE_ACCEPTANCE_V1\n"
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -25,42 +26,103 @@ def unique_object(pairs):
     return result
 
 
-def get(repo, endpoint, paginate=False):
-    args = ["gh", "api"]
-    if paginate:
-        # Older gh versions do not provide --slurp; --paginate emits one JSON
-        # array per page, concatenated. Decode every page, including the last.
-        args.append("--paginate")
-    args.append(f"repos/{repo}/{endpoint}")
-    raw = subprocess.check_output(args, text=True, stderr=subprocess.DEVNULL, timeout=30)
-    if not paginate:
-        return json.loads(raw, object_pairs_hook=unique_object)
-    decoder = json.JSONDecoder(object_pairs_hook=unique_object)
-    pages = []
-    pos = 0
-    while pos < len(raw):
-        while pos < len(raw) and raw[pos].isspace():
-            pos += 1
-        if pos == len(raw):
-            break
-        page, pos = decoder.raw_decode(raw, pos)
-        if not isinstance(page, list):
+def get(repo, endpoint):
+    path = f"repos/{repo}" + (f"/{endpoint}" if endpoint else "")
+    raw = subprocess.check_output(["gh", "api", path], text=True, stderr=subprocess.DEVNULL, timeout=30)
+    return json.loads(raw, object_pairs_hook=unique_object)
+
+
+def comment_pages(repo, issue, repo_id, page_size=100):
+    """Follow and validate GitHub's Link chain without trusting link destinations."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or type(repo_id) is not int or repo_id <= 0 \
+            or type(issue) is not int or issue <= 0:
+        raise ValueError("invalid repository identity")
+    if type(page_size) is not int or not 1 <= page_size <= 100:
+        raise ValueError("invalid page size")
+    page, last_page, pages = 1, None, []
+    while True:
+        if page > 1000:
+            raise ValueError("pagination limit exceeded")
+        path = f"repos/{repo}/issues/{issue}/comments?per_page={page_size}&page={page}"
+        raw = subprocess.check_output(["gh", "api", "-i", path], text=True, stderr=subprocess.DEVNULL, timeout=30)
+        head, separator, body = raw.partition("\n\n")
+        if not separator:
+            raise ValueError("missing response headers")
+        lines = head.splitlines()
+        if not lines or not re.fullmatch(r"HTTP/\d(?:\.\d)? 200(?: .*)?", lines[0]):
+            raise ValueError("invalid HTTP status")
+        values = []
+        for line in lines[1:]:
+            header = re.fullmatch(r"([!#$%&'*+.^_`|~0-9A-Za-z-]+):[ \t]*(.*)", line)
+            if not header:
+                raise ValueError("malformed HTTP response header")
+            if header.group(1).lower() == "link":
+                values.append(header.group(2))
+        if len(values) > 1:
+            raise ValueError("duplicate Link headers")
+        links = {}
+        if values:
+            for entry in values[0].split(","):
+                match = re.fullmatch(r'\s*<([^<>]+)>;\s*rel="(next|last|prev|first)"\s*', entry)
+                if not match:
+                    raise ValueError("malformed pagination link")
+                url, relation = match.groups()
+                if relation in links:
+                    raise ValueError("duplicate pagination relation")
+                parsed = urlsplit(url)
+                expected_paths = {f"/repositories/{repo_id}/issues/{issue}/comments", f"/repos/{repo}/issues/{issue}/comments"}
+                query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+                if parsed.scheme != "https" or parsed.netloc != "api.github.com" or parsed.path not in expected_paths \
+                        or parsed.fragment or set(query) != {"per_page", "page"} \
+                        or query["per_page"] != [str(page_size)] or len(query["page"]) != 1 \
+                        or not re.fullmatch(r"[1-9][0-9]*", query["page"][0]):
+                    raise ValueError("pagination link is not bound to this repository and issue")
+                links[relation] = int(query["page"][0])
+        if page == 1 and ("prev" in links or "first" in links):
+            raise ValueError("unexpected previous or first page")
+        if ("prev" in links and links["prev"] != page - 1) or ("first" in links and links["first"] != 1):
+            raise ValueError("invalid previous or first page")
+        if page > 1 and (links.get("prev") != page - 1 or links.get("first") != 1):
+            raise ValueError("missing previous or first page")
+        if "next" in links:
+            if links["next"] != page + 1 or "last" not in links or links["last"] < page + 1:
+                raise ValueError("invalid next or last page")
+            if last_page is not None and last_page != links["last"]:
+                raise ValueError("last page changed during traversal")
+            last_page = links["last"]
+        elif (last_page is not None and page != last_page) or "last" in links:
+            raise ValueError("pagination ended before the last page")
+        rows = json.loads(body, object_pairs_hook=unique_object)
+        if not isinstance(rows, list) or len(rows) > page_size or (page > 1 and not rows) \
+                or ("next" in links and len(rows) != page_size):
             raise ValueError("invalid comments page")
-        pages.append(page)
-    if not pages:
-        raise ValueError("empty comments response")
-    return pages
+        pages.append(rows)
+        if "next" not in links:
+            return pages
+        page += 1
 
 
 def verify(repo, issue, version, sha):
     if version != "v0.25.0" or not SHA.fullmatch(sha):
         raise ValueError("missing or invalid exact candidate SHA")
+    repo_data = get(repo, "")
+    if not isinstance(repo_data, dict) or not isinstance(repo_data.get("full_name"), str) \
+            or repo_data["full_name"].lower() != repo.lower() \
+            or type(repo_data.get("id")) is not int or repo_data["id"] <= 0:
+        raise ValueError("invalid repository identity response")
     issue_data = get(repo, f"issues/{issue}")
     if not isinstance(issue_data, dict) or type(issue_data.get("number")) is not int \
             or issue_data["number"] != issue or type(issue_data.get("comments")) is not int \
-            or issue_data["comments"] < 0:
+            or issue_data["comments"] < 0 or not isinstance(issue_data.get("updated_at"), str) \
+            or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", issue_data["updated_at"]):
         raise ValueError("invalid issue identity or comment count")
-    pages = get(repo, f"issues/{issue}/comments?per_page=100", paginate=True)
+    pages = comment_pages(repo, issue, repo_data["id"])
+    issue_after = get(repo, f"issues/{issue}")
+    if not isinstance(issue_after, dict) or type(issue_after.get("number")) is not int \
+            or issue_after["number"] != issue or type(issue_after.get("comments")) is not int \
+            or issue_after["comments"] != issue_data["comments"] \
+            or issue_after.get("updated_at") != issue_data["updated_at"]:
+        raise ValueError("issue changed during comment collection")
     if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
         raise ValueError("invalid or incomplete comments response")
     comments = [item for page in pages for item in page]

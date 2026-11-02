@@ -187,12 +187,15 @@ credentials, rules, OIDC trust, reviewers or event enforcement.
 The installed GitHub CLI was 2.23.0. A real read of issue #646 comments with
 `per_page=2` returned five pages and ten comments, matching the issue API's
 count at that instant. This demonstrated multi-page parsing only; #646 has no
-qualifying acceptance record and no live acceptance was asserted. The proposed
-follow-up compares the number of received comments with the issue response,
-rejects duplicate IDs, malformed counts/pages and failed calls, and tests a
-partial-output/nonzero-exit case. A count match is not a transactional API
-snapshot and cannot prove report contents or protect against malicious API
-responses; transient comment changes can cause a fail-closed retry.
+qualifying acceptance record and no live acceptance was asserted. The updated
+checker validates every Link relation and its repository/issue/page binding,
+fetches each page at a constructed endpoint, compares counts and `updated_at`
+before and after, and rejects duplicate IDs, malformed pages and failed calls.
+Offline fixtures test broken links, changing issue metadata and partial output.
+A count match is not a transactional API snapshot and cannot prove report
+contents or protect against malicious API responses; transient comment changes
+can cause a fail-closed retry. See [Actions execution protections](ACTIONS_EXECUTION_PROTECTIONS.md)
+for the current availability finding and owner verification runbook.
 
 The assessment script takes `--snapshot` pointing to a non-secret JSON object;
 the fixture schema is illustrated by `snapshot()` in its test. Its

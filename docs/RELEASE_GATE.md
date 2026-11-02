@@ -109,13 +109,16 @@ with `NEXAROUTE_ACCEPTANCE_V1` on its own line followed by one JSON object:
 nonblank `summary`. The latest structured record from an OWNER or MEMBER must
 match the candidate. The gate verifies that the run is a successful completed
 manual dispatch on that SHA, and the unexpired artifact belongs to that run
-and SHA. All paginated issue-comment pages are parsed (including on older gh
-versions without `--slurp`); the count is compared with the issue API and
-comment IDs must be unique. Concurrent comment changes can cause a safe
-failure and require retry. Malformed or incomplete pages, duplicate JSON keys,
+and SHA. Each issue-comment page is fetched individually using `gh api -i`.
+The gate validates every Link relation, canonical repository identity, issue,
+page and page-size, following the validated sequence with constructed endpoints
+rather than arbitrary URLs. It compares the unique comment count and issue
+`updated_at` before and after traversal. Concurrent changes can require a
+fail-closed retry. Malformed or incomplete pages, duplicate JSON keys or IDs,
 API failures, stale or missing records and parser errors fail closed.
-The count comparison is not an atomic GitHub snapshot; API and trust
-assumptions still require operator review.
+These reads are not an atomic snapshot: same-timestamp edits, races after the
+last read, and an untrustworthy API remain outside the guarantee. Operator
+review is still required.
 
 This metadata is **not proof** that the artifact contains genuine acceptance;
 an independent reviewer must read the artifact and verify every issue criterion,
