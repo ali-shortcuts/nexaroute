@@ -189,3 +189,21 @@ Git history and the PR checks to identify the subsequent committed candidate.
   necessary for the #822/#824 release-policy conflict. #646–#654 remain open;
   their organizational infrastructure, authorized spend, independent review,
   and final-candidate soak requirements remain unmet as documented above.
+
+#### Local network acknowledgment-loss follow-up
+
+A subsequent real-network test supersedes the statement above that lost packets
+remain entirely untested: a local TCP PostgreSQL protocol proxy observed the
+server's `CommandComplete(COMMIT)`, dropped that message and closed the
+connection before the client received it. Against disposable PostgreSQL 16.15,
+`CreateRun`, `AppendNodeExecution`, `TryClaim`, `SaveNodeExecution`,
+`UpdateRunState`, `RecordApproval`, `Publish`, and `PublishIfUnchanged` each
+returned the uncertainty sentinel; reconnection observed the committed state.
+Both publication variants replayed without a second revision for the tested
+inputs. This is a real local connection loss, in addition to the earlier
+post-commit driver injection. It does not establish remote-network, TLS,
+server crash/failover, rollback, serialization-conflict, or exhaustive
+operation/retry safety. In particular direct autocommit `SaveDraft` and
+`ReleaseLease`, and `Prune`, still need dedicated fault cases; blind append
+retry is still unsafe. The test intentionally runs only against an explicitly
+configured local plaintext disposable PostgreSQL instance and otherwise skips.
