@@ -31,11 +31,12 @@ if issue_match:
         closed_at = "2026-11-02T00:00:00Z" if issue == 654 else "2026-11-01T00:00:00Z"
         if mode == "umbrella-first" and issue == 654: closed_at = "2026-10-31T00:00:00Z"
         if mode == "missing-date" and issue == 646: closed_at = None
-        print(json.dumps({"number": number, "state": state, "state_reason": reason, "closed_at": closed_at}))
+        count = "1" if mode == "bad-comment-count" and issue == 646 else (2 if mode == "duplicate-comment" and issue == 646 else 1)
+        print(json.dumps({"number": number, "state": state, "state_reason": reason, "closed_at": closed_at, "comments": count}))
     else:
         if "--paginate" not in sys.argv: sys.exit(2)
         if mode == "comment-error" and issue == 646: sys.exit(1)
-        if mode == "missing" and issue == 646:
+        if mode in ("missing", "incomplete-pages") and issue == 646:
             print("[]"); sys.exit(0)
         rec = {"issue": issue, "release": "v0.25.0", "commit": sha, "result": "PASS",
                "run_id": 100000 + issue, "artifact_id": 200000 + issue, "summary": "fixture"}
@@ -44,6 +45,10 @@ if issue_match:
         comment = {"id": issue, "created_at": "2026-11-01T00:00:00Z", "author_association": "OWNER",
                    "body": "NEXAROUTE_ACCEPTANCE_V1\n" + json.dumps(rec)}
         if mode == "unauthorized" and issue == 646: comment["author_association"] = "NONE"
+        if mode == "partial-page-error" and issue == 646:
+            print(json.dumps([comment])); sys.exit(1)
+        if mode == "duplicate-comment" and issue == 646:
+            print(json.dumps([comment, comment])); sys.exit(0)
         if mode == "multiple-pages": print("[]")
         if mode == "bad-page" and issue == 646: print('{invalid')
         if mode == "bad-comment" and issue == 646: print('[null]')
@@ -108,7 +113,7 @@ def main():
         rc, _ = run(body=json.dumps({"release": "v0.25.0", "exclusions": [entry]}))
         assert rc != 0, "signed exclusion passed even with closed issues"
         for mode in ("open", "not-planned", "api-error", "wrong-issue", "umbrella-first", "missing-date", "jq-error", "missing", "stale", "result-fail",
-                     "unauthorized", "bad-page", "bad-comment", "duplicate-record", "comment-error", "main-error", "main-stale", "run-error", "run-sha", "pr-run", "expired", "wrong-run"):
+                     "unauthorized", "bad-page", "bad-comment", "incomplete-pages", "bad-comment-count", "duplicate-comment", "partial-page-error", "duplicate-record", "comment-error", "main-error", "main-stale", "run-error", "run-sha", "pr-run", "expired", "wrong-run"):
             rc, _ = run(mode=mode, body=good_empty)
             assert rc != 0, f"{mode} passed"
         for body in ('{', '{"release":"v0.24.0","exclusions":[]}', '{"release":"v0.25.0"}', good_empty + good_empty,

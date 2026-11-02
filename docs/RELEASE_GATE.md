@@ -110,8 +110,13 @@ nonblank `summary`. The latest structured record from an OWNER or MEMBER must
 match the candidate. The gate verifies that the run is a successful completed
 manual dispatch on that SHA, and the unexpired artifact belongs to that run
 and SHA. All paginated issue-comment pages are parsed (including on older gh
-versions without `--slurp`); malformed pages, duplicate JSON keys, API failures,
-stale or missing records and parser errors fail closed.
+versions without `--slurp`); the count is compared with the issue API and
+comment IDs must be unique. Concurrent comment changes can cause a safe
+failure and require retry. Malformed or incomplete pages, duplicate JSON keys,
+API failures, stale or missing records and parser errors fail closed.
+The count comparison is not an atomic GitHub snapshot; API and trust
+assumptions still require operator review.
+
 This metadata is **not proof** that the artifact contains genuine acceptance;
 an independent reviewer must read the artifact and verify every issue criterion,
 topology and authorization. GitHub Actions metadata read permission is needed;

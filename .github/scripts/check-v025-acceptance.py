@@ -55,16 +55,25 @@ def get(repo, endpoint, paginate=False):
 def verify(repo, issue, version, sha):
     if version != "v0.25.0" or not SHA.fullmatch(sha):
         raise ValueError("missing or invalid exact candidate SHA")
+    issue_data = get(repo, f"issues/{issue}")
+    if not isinstance(issue_data, dict) or type(issue_data.get("number")) is not int \
+            or issue_data["number"] != issue or type(issue_data.get("comments")) is not int \
+            or issue_data["comments"] < 0:
+        raise ValueError("invalid issue identity or comment count")
     pages = get(repo, f"issues/{issue}/comments?per_page=100", paginate=True)
     if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
         raise ValueError("invalid or incomplete comments response")
     comments = [item for page in pages for item in page]
+    if len(comments) != issue_data["comments"]:
+        raise ValueError("incomplete or changed paginated issue comments")
     if any(not isinstance(c, dict) or type(c.get("id")) is not int or c["id"] <= 0
            or not isinstance(c.get("created_at"), str) or not re.fullmatch(
                r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", c["created_at"])
            or not isinstance(c.get("body"), str) or not isinstance(c.get("author_association"), str)
            for c in comments):
         raise ValueError("malformed issue comment response")
+    if len({c["id"] for c in comments}) != len(comments):
+        raise ValueError("duplicate issue comment ID")
     records = [c for c in comments if isinstance(c.get("body"), str) and c["body"].startswith(MARKER)
                and c.get("author_association") in ("OWNER", "MEMBER")]
     if not records:
