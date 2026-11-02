@@ -242,9 +242,12 @@ func (s *FileStore) persist(state *storeState) error {
 }
 
 // mutate applies fn to a clone of the state and persists the clone
-// before swapping it in. A persist failure leaves the previous state
-// untouched, so memory never runs ahead of disk.
+// before swapping it in. It requires s.mu and rejects writes after Close:
+// the path lock may by then belong to another FileStore instance.
 func (s *FileStore) mutate(fn func(st *storeState) error) error {
+	if s.lockFile == nil {
+		return fmt.Errorf("nexaflow: file store: %w", os.ErrClosed)
+	}
 	clone := s.state.clone()
 	if err := fn(clone); err != nil {
 		return err
