@@ -405,3 +405,10 @@ func TestPostgresVideoStoreTerminalReplayAfterClaim(t *testing.T) {
 		t.Fatalf("terminal overwrite err = %v, want ErrTerminalJob", err)
 	}
 }
+
+// Match memory/file behavior when an idempotency key changes under row lock.
+func TestPostgresVideoStoreIdempotencyUpdate(t *testing.T) {
+	s := openVideoPGStore(t)
+	resetVideoJobsTable(t, s)
+	checkIdempotencyUpdate(t, s)
+}

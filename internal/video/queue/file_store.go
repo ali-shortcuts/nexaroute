@@ -30,16 +30,19 @@ func NewFileStore(path string) (*FileStore, error) {
 	}
 	s := &FileStore{path: path, jobs: map[string]video.VideoJob{}, idem: map[string]string{}}
 	if data, err := os.ReadFile(path); err == nil {
-		var st fileState
+		var st *fileState
 		if err = json.Unmarshal(data, &st); err != nil {
 			return nil, fmt.Errorf("decode job store: %w", err)
+		}
+		if st == nil {
+			return nil, fmt.Errorf("decode job store: null document")
 		}
 		if st.Jobs != nil {
 			s.jobs = st.Jobs
 		}
-		if st.Idempotency != nil {
-			s.idem = st.Idempotency
-		}
+		// Jobs are authoritative: old stores may contain stale index entries
+		// from an interrupted or historical key update. Rebuild the index
+		// without allowing dangling or mismatched mappings to select a job.
 		for id, job := range s.jobs {
 			if job.IdempotencyKey == "" {
 				continue
@@ -148,9 +151,31 @@ func (s *FileStore) Update(_ context.Context, j video.VideoJob) error {
 	if err := checkTerminalUpdate(old, j); err != nil {
 		return err
 	}
+	changedKey := old.IdempotencyKey != j.IdempotencyKey
+	if changedKey {
+		if j.IdempotencyKey != "" {
+			if id, exists := s.idem[j.IdempotencyKey]; exists && id != j.JobID {
+				return ErrIdempotencyConflict
+			}
+		}
+		if old.IdempotencyKey != "" {
+			delete(s.idem, old.IdempotencyKey)
+		}
+		if j.IdempotencyKey != "" {
+			s.idem[j.IdempotencyKey] = j.JobID
+		}
+	}
 	s.jobs[j.JobID] = j
 	if err := s.persist(); err != nil {
 		s.jobs[j.JobID] = old
+		if changedKey {
+			if j.IdempotencyKey != "" {
+				delete(s.idem, j.IdempotencyKey)
+			}
+			if old.IdempotencyKey != "" {
+				s.idem[old.IdempotencyKey] = j.JobID
+			}
+		}
 		return err
 	}
 	return nil

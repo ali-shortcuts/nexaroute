@@ -111,6 +111,19 @@ func (s *MemoryStore) Update(_ context.Context, j video.VideoJob) error {
 	if err := checkTerminalUpdate(old, j); err != nil {
 		return err
 	}
+	if j.IdempotencyKey != old.IdempotencyKey {
+		if j.IdempotencyKey != "" {
+			if id, exists := s.idem[j.IdempotencyKey]; exists && id != j.JobID {
+				return ErrIdempotencyConflict
+			}
+		}
+		if old.IdempotencyKey != "" {
+			delete(s.idem, old.IdempotencyKey)
+		}
+		if j.IdempotencyKey != "" {
+			s.idem[j.IdempotencyKey] = j.JobID
+		}
+	}
 	s.jobs[j.JobID] = j
 	return nil
 }

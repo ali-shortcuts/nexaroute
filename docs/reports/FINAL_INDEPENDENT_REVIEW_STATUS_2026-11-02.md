@@ -135,3 +135,57 @@ Waited for all existing checks. GitHub reports five exact-head PR runs completed
 This is not a complete persistence audit. PostgreSQL real outage/commit ambiguity, multi-host operation, other storage paths and external recovery remain unverified. Filesystem guarantees on network/unsupported filesystems and process/power-loss crash behavior were not demonstrated by injected errors. File-store reopen and standard lock tests are not independent-host acceptance. Review all changes independently and keep release BLOCKED.
 
 Additional red/green check: a standalone regression run against an archive of `79b96e6` failed because an existing zero-byte file was accepted; the new empty/null regressions pass in the changed package's race run. Real PostgreSQL behavior under injected commit failures remains NOT RUN, and the encoding tests do not replace live database acceptance.
+
+### Continued persistence audit — working changes after 8dd7411
+
+Release remains **BLOCKED**. These results are not independent review, final
+acceptance, or a two-hour soak. The evidence below applies to the working tree
+in which this entry was authored, not to the earlier `8dd7411` CI result; use
+Git history and the PR checks to identify the subsequent committed candidate.
+
+* Provisioned an isolated PostgreSQL 16.15 instance on a local Unix socket,
+  using a disposable trust-authenticated test cluster. With the temporary
+  codeload-based Go module replacements described earlier, the full NexaFlow
+  package race suite passed with `NEXAROUTE_TEST_PG_DSN` pointing to this real
+  database. The migration rollback test now uses the configured disposable
+  administrator DSN rather than hardcoding a root peer-auth socket and TCP
+  port. It still requires a role authorized to create/drop temporary roles and
+  databases. Updated the obsolete invalid-JSON fallback expectation to check
+  rejection and preservation against real PostgreSQL.
+* Added a driver-boundary fault that performs a real PostgreSQL COMMIT, then
+  injects an error in place of its acknowledgment. Tested durable readback of
+  the committed run and node, error cause/sentinel propagation, and fail-closed
+  engine replay/Execute after a partially initialized run. This is **not** an
+  actual network partition, server crash, failover, or a full transaction fault
+  matrix. `ErrPostgresCommitUncertain` now marks transaction COMMIT errors;
+  it conservatively includes definite failures and does not cover every
+  autocommit statement. Blind `AppendNodeExecution` retry still creates a new
+  attempt: there is no stable append operation token. The engine now detects
+  missing initial nodes on replay/Execute but cannot atomically create or
+  automatically repair them. Direct store clients, startup recovery, other
+  write paths, multi-process races, and actual lost packets remain open.
+* Fixed approval replay returning the caller's requester instead of the stored
+  requester, discarding an ignored query error, and returning a timestamp with
+  precision different from PostgreSQL's persisted timestamp. Concurrent
+  first-decision races and ambiguous autocommit paths remain to be audited.
+* Fixed video memory/file stores failing to update or enforce the idempotency
+  index when a job's key changes; file persistence failure now rolls back the
+  index too. Reopen reconstructs the index from jobs rather than trusting stale
+  mappings; `null` documents fail closed. Regression tests exercised key
+  changes, conflicts, reuse, deletion, restart, stale-index recovery and JSON
+  encoding rollback; a matching real-PostgreSQL integration test passed.
+  Full video queue integration race suite also passed against this disposable
+  PostgreSQL. Video FileStore still ignores directory open/sync errors and has
+  no interprocess locking; this work does **not** certify its crash durability.
+* Added actual subprocess SIGKILL tests before rename and after rename/before
+  directory sync, checking reopen, preserved baseline, visible rename state and
+  released lock, plus Unix file/directory permissions. These are process-kill
+  tests only: they do not prove power-loss persistence or network filesystem
+  behavior. Continue corruption, concurrency, unsupported filesystem, and
+  fault-injection audits across stores and the broader project.
+* GitHub Code Scanning analyses endpoint still returns HTTP 403. Authorized
+  `security_events` analysis access is needed to investigate the neutral
+  comparison without deleting or dismissing analyses. Owner decision remains
+  necessary for the #822/#824 release-policy conflict. #646–#654 remain open;
+  their organizational infrastructure, authorized spend, independent review,
+  and final-candidate soak requirements remain unmet as documented above.

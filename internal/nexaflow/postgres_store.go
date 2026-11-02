@@ -13,6 +13,18 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver for this adapter
 )
 
+// ErrPostgresCommitUncertain indicates that PostgreSQL did not confirm a
+// transaction commit. The transaction may have committed. Reconcile durable
+// state before any retry; AppendNodeExecution is not replay-idempotent.
+var ErrPostgresCommitUncertain = errors.New("nexaflow: postgres commit outcome uncertain; reconcile before retry")
+
+func commitPostgres(tx *sql.Tx) error {
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: %w", ErrPostgresCommitUncertain, err)
+	}
+	return nil
+}
+
 // PostgreSQL workflow store (Phase 2): the Store contract over five
 // tables for multi-process deployments where the file store cannot be
 // shared. Semantics match the memory store (the shared store-contract
@@ -159,7 +171,7 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 			return fmt.Errorf("nexaflow: workflow migration statement: %w", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return fmt.Errorf("nexaflow: commit workflow migration: %w", err)
 	}
 	return nil
@@ -285,7 +297,7 @@ func (s *PostgresStore) publish(ctx context.Context, definitionID, publishedBy, 
 		if err := json.Unmarshal(lastDef, &def); err != nil {
 			return PublishedDefinition{}, err
 		}
-		if err := tx.Commit(); err != nil {
+		if err := commitPostgres(tx); err != nil {
 			return PublishedDefinition{}, err
 		}
 		// Same guard as above, repeated at the conversion site:
@@ -321,7 +333,7 @@ func (s *PostgresStore) publish(ctx context.Context, definitionID, publishedBy, 
 		definitionID, next, hash, encodedDraft, string(DefinitionPublished), publishedBy, now); err != nil {
 		return PublishedDefinition{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return PublishedDefinition{}, err
 	}
 	return PublishedDefinition{
@@ -358,7 +370,7 @@ func (s *PostgresStore) SupersedeRevision(ctx context.Context, definitionID stri
 		}
 		return PublishedDefinition{}, ErrStateConflict
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return PublishedDefinition{}, err
 	}
 	return s.GetRevision(ctx, definitionID, revision)
@@ -522,7 +534,7 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 		}
 		return err
 	}
-	return tx.Commit()
+	return commitPostgres(tx)
 }
 
 func nullTime(t time.Time) any {
@@ -590,7 +602,7 @@ func (s *PostgresStore) UpdateRunState(ctx context.Context, runID string, expect
 		runID, string(state), errorCode, errMsg, now, nullTime(started), nullTime(finished)); err != nil {
 		return Run{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return Run{}, err
 	}
 	cur.State = state
@@ -664,7 +676,7 @@ func (s *PostgresStore) Prune(ctx context.Context, before time.Time) (int, error
 	if err != nil {
 		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return 0, err
 	}
 	return int(n), nil
@@ -735,7 +747,7 @@ func (s *PostgresStore) AppendNodeExecution(ctx context.Context, exec NodeExecut
 		exec.RunID, exec.NodeID, attempt, payload, string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
 		return NodeExecution{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return NodeExecution{}, err
 	}
 	return exec, nil
@@ -805,7 +817,7 @@ func (s *PostgresStore) SaveNodeExecution(ctx context.Context, exec NodeExecutio
 		exec.RunID, exec.NodeID, exec.Attempt, payload, string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
 		return NodeExecution{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return NodeExecution{}, err
 	}
 	return exec, nil
@@ -873,7 +885,6 @@ func (s *PostgresStore) TryClaim(ctx context.Context, runID, nodeID, owner strin
 	if errors.Is(err, sql.ErrNoRows) {
 		// No row matched: a live foreign lease blocks, or the state
 		// is not claimable. Either way the claim loses, without error.
-		_ = tx.Commit()
 		return NodeExecution{}, false, nil
 	}
 	if err != nil {
@@ -891,7 +902,7 @@ func (s *PostgresStore) TryClaim(ctx context.Context, runID, nodeID, owner strin
 	e.Input = deepCopyMap(e.Input)
 	e.Output = deepCopyMap(e.Output)
 	e.ResumeInput = deepCopyMap(e.ResumeInput)
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return NodeExecution{}, false, err
 	}
 	return e, true, nil
@@ -918,32 +929,30 @@ func (s *PostgresStore) RecordApproval(ctx context.Context, appr Approval) (Appr
 		return Approval{}, err
 	}
 	defer tx.Rollback()
-	var prevDecision, prevApprover string
+	var prevDecision, prevApprover, prevRequester string
+	var decidedAt time.Time
 	err = tx.QueryRowContext(ctx,
-		`SELECT decision, approver FROM `+wfApprovalsTable+` WHERE run_id = $1 AND node_id = $2 FOR UPDATE`,
-		appr.RunID, appr.NodeID).Scan(&prevDecision, &prevApprover)
+		`SELECT decision, approver, requester, decided_at FROM `+wfApprovalsTable+` WHERE run_id = $1 AND node_id = $2 FOR UPDATE`,
+		appr.RunID, appr.NodeID).Scan(&prevDecision, &prevApprover, &prevRequester, &decidedAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return Approval{}, err
 	}
 	if err == nil {
 		if prevDecision == appr.Decision && prevApprover == appr.Approver {
-			var decidedAt time.Time
-			_ = tx.QueryRowContext(ctx,
-				`SELECT decided_at FROM `+wfApprovalsTable+` WHERE run_id = $1 AND node_id = $2`,
-				appr.RunID, appr.NodeID).Scan(&decidedAt)
-			_ = tx.Commit()
+			appr.Requester = prevRequester
 			appr.DecidedAt = decidedAt
 			return appr, nil
 		}
 		return Approval{}, ErrApprovalConflict
 	}
-	now := time.Now()
+	// PostgreSQL timestamps are stored at microsecond precision.
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO `+wfApprovalsTable+` (run_id, node_id, requester, approver, decision, decided_at) VALUES ($1, $2, $3, $4, $5, $6)`,
 		appr.RunID, appr.NodeID, appr.Requester, appr.Approver, appr.Decision, now); err != nil {
 		return Approval{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return Approval{}, err
 	}
 	appr.DecidedAt = now

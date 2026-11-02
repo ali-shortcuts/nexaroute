@@ -10,8 +10,10 @@ import (
 
 // Store errors. ErrNotFound, ErrAlreadyExists, ErrIdempotencyConflict,
 // ErrTerminalState and ErrStateConflict are the only error values a
-// Store implementation returns for its own contract violations; I/O and
-// driver errors pass through unwrapped so callers can see the cause.
+// Store implementation returns for its own contract violations. I/O and
+// driver errors may be wrapped; errors.Is/errors.As preserve their causes.
+// A Postgres transaction commit error may be ErrPostgresCommitUncertain and
+// must be reconciled before retrying non-idempotent operations.
 var (
 	ErrNotFound            = errors.New("nexaflow: not found")
 	ErrAlreadyExists       = errors.New("nexaflow: already exists")

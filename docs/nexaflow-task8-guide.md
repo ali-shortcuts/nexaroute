@@ -748,3 +748,25 @@ What changed on the canonical line in that reconciliation:
   Until gateway wiring lands, schedules, webhooks, and startup
   recovery are service-level primitives, not running gateway
   behaviour — do not present them as live gateway features.
+
+### PostgreSQL commit ambiguity and incomplete runs
+
+A PostgreSQL transaction commit error can match `ErrPostgresCommitUncertain`;
+its underlying driver error remains available with `errors.Is`/`errors.As`.
+This is conservative: some commit errors may represent a definite rollback.
+Direct autocommit statements may also have ambiguous outcomes, but do not
+currently receive this sentinel. Do not blindly retry a mutation after an
+ambiguous response. In particular `AppendNodeExecution` allocates the next
+attempt, so a retry can create a second attempt even if the first committed.
+Reconcile against durable state and involve an operator when the outcome
+cannot be established. This mechanism is not an exactly-once protocol.
+
+Run creation and initial node insertion are separate transactions. A failed
+creation can leave an incomplete run. Idempotent creation replay and Execute
+now reject a run missing initial node records with
+`ErrRunInitializationIncomplete`, instead of reporting successful initialization
+or dispatching partial state. A concurrent replay can temporarily see this
+error while the original creation is still in progress. This is fail-closed,
+not automatic repair or atomic run initialization; reconcile incomplete runs
+before resuming or force-failing them. Direct store clients and other recovery
+paths require their own review.
