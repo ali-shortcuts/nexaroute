@@ -66,7 +66,12 @@ func bodyReadFindings(name string, src []byte) (int, []string, error) {
 			}
 		}
 		var writes []token.Pos
+		var loops []ast.Node
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			switch n.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				loops = append(loops, n)
+			}
 			a, ok := n.(*ast.AssignStmt)
 			if ok {
 				for _, e := range a.Lhs {
@@ -108,6 +113,14 @@ func bodyReadFindings(name string, src []byte) (int, []string, error) {
 			for _, p := range writes {
 				if p > bound && p < c.Pos() {
 					bound = token.NoPos
+				}
+				// A write lexically after the read may execute before the read
+				// on the next iteration of an enclosing loop. Conservatively
+				// reject it even when a branch might not take that write.
+				for _, loop := range loops {
+					if loop.Pos() < c.Pos() && c.Pos() < p && p < loop.End() {
+						bound = token.NoPos
+					}
 				}
 			}
 			if bound == token.NoPos {
@@ -162,6 +175,11 @@ func TestBodyReadFindingsRedGreen(t *testing.T) {
 		{"bounded-assignment", `r.Body = http.MaxBytesReader(w, r.Body, 4096); io.ReadAll(r.Body)`, 0},
 		{"conditional-assignment", `if ok { r.Body = http.MaxBytesReader(w, r.Body, 4096) }; io.ReadAll(r.Body)`, 1},
 		{"reassignment", `r.Body = http.MaxBytesReader(w, r.Body, 4096); r.Body = other; io.ReadAll(r.Body)`, 1},
+		{"loop-reassignment-after-read", `r.Body = http.MaxBytesReader(w, r.Body, 4096); for more { io.ReadAll(r.Body); r.Body = other }`, 1},
+		{"range-reassignment-after-read", `r.Body = http.MaxBytesReader(w, r.Body, 4096); for range items { json.NewDecoder(r.Body); r.Body = other }`, 1},
+		{"outer-loop-reassignment", `r.Body = http.MaxBytesReader(w, r.Body, 4096); for more { for more { io.ReadAll(r.Body) }; r.Body = other }`, 1},
+		{"loop-without-reassignment", `r.Body = http.MaxBytesReader(w, r.Body, 4096); for more { io.ReadAll(r.Body) }`, 0},
+		{"inline-loop-reassignment", `for more { io.ReadAll(http.MaxBytesReader(w, r.Body, 4096)); r.Body = other }`, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
