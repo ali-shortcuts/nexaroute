@@ -13,13 +13,24 @@ the SHA is NOT_RUN, never PASS.
 # tests; this script only reads their recorded check runs.
 bash scripts/release-gate-status.sh <full-40-hex-sha>
 # Release-candidate verdict (also requires the manual-only gates):
-bash scripts/release-gate-status.sh <sha> --rc
+bash scripts/release-gate-status.sh <sha> --rc --soak-summary /path/to/downloaded/summary.json
 ```
 
 The script exits non-zero unless every required gate is PASS, and
 prints `Release Gate Passed` only in that case. A gate that is
 queued or running prints RUNNING and fails the gate until it
-finishes; an unreadable Checks API response prints BLOCKED. Its own
+finishes; an unreadable Checks API response prints BLOCKED. In `--rc` mode a
+successful check also needs a completed successful Actions run for the same
+head SHA triggered by push or manual dispatch. PR checks may be attached to a
+head while testing a synthetic merge commit, so they are UNVERIFIED for that
+head, not release evidence. Unknown or unreadable run provenance is likewise
+UNVERIFIED. A passing soak check is not enough: `--soak-summary` must name a
+complete PASS report for that SHA with at least 7,200 seconds requested and
+sustained. Keep the report's resource-samples file alongside it. The operator
+must independently verify that the supplied report and samples came from the
+matching successful Actions run; local files alone are not authenticated.
+The script does not verify owner approval, external acceptance, the provenance
+of arbitrary workflow code, or the artifact-to-run binding. Its own
 regression tests (`bash scripts/test-release-gate-status.sh`) run
 offline against a fake `gh` and cover pass, one-failed, missing
 (= NOT_RUN), running, API-error (= BLOCKED), non-SHA refusal, the
@@ -68,20 +79,68 @@ candidate (`--rc`):
 | Soak, 2 h sustained mixed workload | Soak workflow, `workflow_dispatch` with `duration: 2h` and a timeout above 2 h 30 m (see `docs/reports/ISSUE664_SOAK_PROCEDURE.md`); the soak report must name the same SHA |
 | Browser evidence on main | Browser evidence workflow, `workflow_dispatch` / main push |
 
-## Completion gate and version-scoped exclusions
+## v0.25.0 owner policy: completion only
 
-`.github/scripts/check-final-release-gate.sh` is the last step before
-publication. It requires issues #646–#653 **and** #654 to be closed.
+The owner selected completion rather than exclusion for v0.25.0. For this exact
+version the completion gate rejects any nonempty or malformed exclusion
+manifest, including signed entries; the retained unsigned historical proposal
+therefore blocks the gate until removed or made empty by reviewed release
+preparation. Do that before selecting the final candidate SHA and collecting
+its evidence: modifying the manifest later changes the commit and makes earlier
+exact-SHA evidence stale. All #646–#654 must be closed with `state_reason=completed`; #654 must have a
+GitHub closure timestamp strictly later than every individual issue. The
+generic version-scoped exclusion mechanism below is preserved for future
+versions and is **not** usable to bypass v0.25.0 acceptance.
+
+The v0.25.0 script additionally resolves `refs/heads/main` through the GitHub
+API and requires the candidate SHA to equal the current main tip; a missing,
+malformed or stale ref response blocks. A conflicting tag ref/name or attempt
+to override the v0.25.0 tag version is rejected. Recheck main immediately before
+release; the comparison is not an atomic lock on main. This script cannot
+prevent an authorized person or a historical tag workflow from publishing
+outside the current gate: repository tag/release permissions and operator
+controls are separately required. In particular, a tag pointing at an older
+ancestor can run that ancestor's older workflow/gate. Do not create such a tag.
+
+For each completed issue the gate requires a GitHub issue comment starting
+with `NEXAROUTE_ACCEPTANCE_V1` on its own line followed by one JSON object:
+`issue` (integer), `release` (`v0.25.0`), `commit` (exact 40-character SHA),
+`result` (`PASS`), `run_id` and `artifact_id` (positive integers), and a
+nonblank `summary`. The latest structured record from an OWNER or MEMBER must
+match the candidate. The gate verifies that the run is a successful completed
+manual dispatch on that SHA, and the unexpired artifact belongs to that run
+and SHA. Each issue-comment page is fetched individually using `gh api -i`.
+The gate validates every Link relation, canonical repository identity, issue,
+page and page-size, following the validated sequence with constructed endpoints
+rather than arbitrary URLs. It compares the unique comment count and issue
+`updated_at` before and after traversal. Concurrent changes can require a
+fail-closed retry. Malformed or incomplete pages, duplicate JSON keys or IDs,
+API failures, stale or missing records and parser errors fail closed.
+These reads are not an atomic snapshot: same-timestamp edits, races after the
+last read, and an untrustworthy API remain outside the guarantee. Operator
+review is still required.
+
+This metadata is **not proof** that the artifact contains genuine acceptance;
+an independent reviewer must read the artifact and verify every issue criterion,
+topology and authorization. GitHub Actions metadata read permission is needed;
+if unavailable the gate blocks, not passes. External CLI acceptance needs an
+authorized workflow that retains the sanitized report for this metadata check.
+Never put credentials, private prompts or ciphertext in records.
+
+## Generic completion gate and version-scoped exclusions (other versions)
+
+For versions other than v0.25.0, `.github/scripts/check-final-release-gate.sh`
+is the last step before publication. It requires issues #646–#653 **and** #654 to be closed.
 
 - Closed with `state_reason=completed`: accepted, no further action.
 - Closed any other way (`not_planned`, no reason): accepted **only** when
   `docs/releases/<version>-exclusions.json` names that exact issue, for that
-  exact version, with a non-empty `reason`, `approved_by` and `approved_at`.
+  exact version, with a non-blank `reason` and `approved_by`, and a valid calendar `approved_at` date in YYYY-MM-DD format. The manifest is a record, not proof of owner identity: reviewers must independently verify the approval.
 - **Open**: always refused. An exclusion can never cover an open blocker.
 
 The manifest is version-scoped and fails closed: an entry with any field
 missing refuses the release, an entry for an issue outside #646–#654 refuses
-the release, a duplicate entry refuses the release, a manifest whose
+the release, an issue identifier must be an integer (not a numeric string), a duplicate entry refuses the release, a manifest whose
 `release` does not match the tag refuses the release, and a manifest is never
 carried forward to a later version. When a blocker needs no exclusion, an
 unused or stale manifest is ignored rather than allowed to fail a clean
@@ -94,7 +153,7 @@ reviewable and machine-checkable; it does not make it silent. Every exclusion
 is printed as a `::warning::` at release time.
 
 See `docs/RELEASE_BLOCKERS.md` for the current per-issue blockers and the
-exact dispatch command that clears each one.
+operator handoff and evidence limits; no single dispatch clears every criterion.
 
 ## Gaps this gate does not hide
 

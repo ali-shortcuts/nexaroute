@@ -31,6 +31,18 @@ Storage selection is a wiring decision, not a workflow field:
 PostgreSQL is the durable authority for multi-instance claims; the
 file store is single-host only; the memory store is test-only.
 
+A FileStore write that fails before rename leaves the prior state intact. If
+rename succeeds but opening or syncing the parent directory fails, the write
+returns `ErrFileStoreCommitUncertain`: it may be present, but durability is
+unknown. The instance refuses further reads and writes. Close it, investigate
+the underlying filesystem error, reopen, inspect the recovered state, and
+reconcile the operation before deciding whether to retry. Reopening does not
+prove the rename would survive a later crash after a failed directory sync.
+Empty or JSON-null existing store files are corrupt and require operator
+recovery; they are not treated as new stores. Closing is idempotent and all
+operations on a closed instance fail. Interprocess file locking is implemented
+only on Linux and Darwin; other platforms must not use concurrent file writers.
+
 ## API reference
 
 All admin routes require admin authentication (401 otherwise) and
@@ -58,6 +70,17 @@ when task7 lands it).
 
 Error mapping: unknown → 404, idempotency/approval conflicts →
 409, state conflicts → 409, validation → 400.
+
+The service validates a fetched draft and passes its complete content hash to
+an atomic compare-and-publish operation. If the draft changes between validation
+and publication, the store returns a conflict (HTTP 409); reload and review the
+new draft before retrying. PostgreSQL compares while holding the draft row lock;
+memory and file stores compare under their mutex. Third-party `Store`
+implementations must implement `ConditionalPublisher`, or service publication
+fails closed. The low-level `Store.Publish` remains an unchecked store primitive
+for compatibility and must not be used as a substitute for service validation.
+This protects the validation-to-publication interval; the API does not yet let
+an editor supply the revision/hash it saw before issuing its publish request.
 
 ## Workflow example (branch workflow, from the tests)
 
@@ -725,3 +748,32 @@ What changed on the canonical line in that reconciliation:
   Until gateway wiring lands, schedules, webhooks, and startup
   recovery are service-level primitives, not running gateway
   behaviour — do not present them as live gateway features.
+
+### PostgreSQL commit ambiguity and incomplete runs
+
+A PostgreSQL transaction commit error can match `ErrPostgresCommitUncertain`;
+its underlying driver error remains available with `errors.Is`/`errors.As`.
+This is conservative: some commit errors may represent a definite rollback.
+Direct autocommit statements may also have ambiguous outcomes, but do not
+currently receive this sentinel. Do not blindly retry a mutation after an
+ambiguous response. `AppendNodeExecution` supports an optional durable
+`NodeExecution.AppendOperationID`, scoped to the run and node: repeat the
+same ID to replay one logical append, and use a different ID for each real
+retry. Empty IDs preserve legacy non-idempotent behavior and must not be blindly
+retried. The engine uses `initial` and `retry:<prior attempt>` IDs. Tokens
+identify an operation; callers must never reuse one for a different operation.
+The PostgreSQL implementation serializes appenders by locking the run row;
+old binaries do not take that lock, so quiesce old writers before rolling out
+this guarantee. This does not make external node side effects exactly once.
+Other mutations still require reconciliation when their outcome is unknown.
+
+Run creation and initial node insertion are separate transactions. A failed
+creation can leave an incomplete run. Idempotent creation replay and Execute
+now reject a run missing initial node records with
+`ErrRunInitializationIncomplete`, instead of reporting successful initialization
+or dispatching partial state. A concurrent replay waits up to two seconds for an in-progress creator,
+then returns this error if initialization remains incomplete; Execute fails
+immediately on incomplete state. This is fail-closed,
+not automatic repair or atomic run initialization; reconcile incomplete runs
+before resuming or force-failing them. Direct store clients and other recovery
+paths require their own review.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -17,8 +18,8 @@ type fileState struct {
 }
 
 // FileStore is the default durable control-plane backend. Every write is
-// serialized, fsynced, and atomically renamed; an interrupted write leaves the
-// previous valid state intact.
+// serialized, fsynced, and atomically renamed. If a directory sync fails
+// after rename, the commit is uncertain and callers must reload and reconcile.
 //
 // Cross-process safety: on Linux every read-modify-write cycle (Put, Delete)
 // and every restore is additionally serialized across processes with an
@@ -159,6 +160,9 @@ func (s *FileStore) load() (fileState, error) {
 	if err != nil {
 		return state, fmt.Errorf("read control-plane store: %w", err)
 	}
+	// Do not decode into the pre-populated empty state: null or missing
+	// fields would otherwise be silently accepted as an empty store.
+	state = fileState{}
 	if err := json.Unmarshal(b, &state); err != nil {
 		return state, fmt.Errorf("decode control-plane store: %w", err)
 	}
@@ -186,15 +190,50 @@ func (s *FileStore) persist(state fileState) error {
 // file in the same directory (same filesystem, so rename is atomic), 0600,
 // fsync of the file and of the directory entry. A crash at any point leaves
 // either the old or the new content at target, never a torn write.
+// ErrFileStoreCommitUncertain indicates rename succeeded but syncing the
+// directory failed. The target may contain the new state; reload and
+// reconcile before retrying Put, Delete, backup, or restore.
+var ErrFileStoreCommitUncertain = errors.New("control-plane file commit uncertain; reload and reconcile")
+
+type atomicFile interface {
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+	Name() string
+}
+type atomicDir interface {
+	Sync() error
+	Close() error
+}
+type atomicFileFS struct {
+	createTemp func(string, string) (atomicFile, error)
+	rename     func(string, string) error
+	openDir    func(string) (atomicDir, error)
+}
+
+func defaultAtomicFileFS() atomicFileFS {
+	return atomicFileFS{
+		createTemp: func(dir, pattern string) (atomicFile, error) { return os.CreateTemp(dir, pattern) },
+		rename:     os.Rename, openDir: func(dir string) (atomicDir, error) { return os.Open(dir) },
+	}
+}
 func writeFileAtomic(dir, pattern, target string, data []byte) error {
-	tmp, err := os.CreateTemp(dir, pattern)
+	return writeFileAtomicWithFS(defaultAtomicFileFS(), dir, pattern, target, data)
+}
+func writeFileAtomicWithFS(fs atomicFileFS, dir, pattern, target string, data []byte) error {
+	tmp, err := fs.createTemp(dir, pattern)
 	if err != nil {
 		return fmt.Errorf("create control-plane temp: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
 	if err = tmp.Chmod(0600); err == nil {
-		_, err = tmp.Write(data)
+		var n int
+		n, err = tmp.Write(data)
+		if err == nil && n != len(data) {
+			err = io.ErrShortWrite
+		}
 	}
 	if err == nil {
 		err = tmp.Sync()
@@ -205,12 +244,18 @@ func writeFileAtomic(dir, pattern, target string, data []byte) error {
 	if err != nil {
 		return fmt.Errorf("write control-plane store: %w", err)
 	}
-	if err = os.Rename(tmpName, target); err != nil {
+	if err = fs.rename(tmpName, target); err != nil {
 		return fmt.Errorf("commit control-plane store: %w", err)
 	}
-	if dirF, err := os.Open(dir); err == nil {
-		_ = dirF.Sync()
-		_ = dirF.Close()
+	dirF, err := fs.openDir(dir)
+	if err == nil {
+		err = dirF.Sync()
+		if closeErr := dirF.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrFileStoreCommitUncertain, err)
 	}
 	return nil
 }

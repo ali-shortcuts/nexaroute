@@ -2142,6 +2142,13 @@ func (s *Continue95NexaflowFailStore) Publish(ctx context.Context, id, by string
 	return s.Store.Publish(ctx, id, by)
 }
 
+func (s *Continue95NexaflowFailStore) PublishIfUnchanged(ctx context.Context, id, by, expectedHash string) (PublishedDefinition, error) {
+	if s.mode == "publish" {
+		return PublishedDefinition{}, s.boom()
+	}
+	return s.Store.(ConditionalPublisher).PublishIfUnchanged(ctx, id, by, expectedHash)
+}
+
 func (s *Continue95NexaflowFailStore) SupersedeRevision(ctx context.Context, id string, rev uint64) (PublishedDefinition, error) {
 	if s.mode == "supersede" {
 		return PublishedDefinition{}, s.boom()
@@ -2256,9 +2263,9 @@ func TestContinue95NexaflowEngineExecuteFailures(t *testing.T) {
 			t.Fatalf("Execute failGetRunAt=%d: err = %v", at, err)
 		}
 	}
-	// Counted GetNodeExecutions failures: sweep 1 is 1, sweep 2 is 2,
-	// recompute is 3.
-	for _, at := range []int{1, 3} {
+	// Counted GetNodeExecutions failures: initialization check is 1,
+	// sweep 1 is 2, sweep 2 is 3, recompute is 4.
+	for _, at := range []int{1, 2, 4} {
 		fs := &Continue95NexaflowFailStore{Store: NewMemoryStore(), failGetNodesAt: at}
 		eng, run := newChain(fs)
 		if _, err := eng.Execute(ctx, run.ID); err == nil || !strings.Contains(err.Error(), "c95 failstore boom") {

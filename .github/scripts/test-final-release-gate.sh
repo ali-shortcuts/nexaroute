@@ -26,19 +26,20 @@ mode="${FAKE_GH_MODE:-pass}"
 # FAKE_GH_CLOSED lets a test close a specific issue as not_planned while the
 # rest of the blocker set is completed, so exclusion handling can be isolated.
 if [[ -n "${FAKE_GH_CLOSED:-}" && "$issue" == "${FAKE_GH_CLOSED}" ]]; then
-  printf '{"state":"closed","state_reason":"not_planned"}\n'
+  printf '{"number":%s,"state":"closed","state_reason":"not_planned"}\n' "$issue"
   exit 0
 fi
 case "${mode}:${issue}" in
   api-error:650) echo "simulated API failure" >&2; exit 1 ;;
-  open:646) printf '{"state":"open","state_reason":null}\n' ;;
-  not-planned:649) printf '{"state":"closed","state_reason":"not_planned"}\n' ;;
-  missing-reason:651) printf '{"state":"closed"}\n' ;;
+  open:646) printf '{"number":%s,"state":"open","state_reason":null}\n' "$issue" ;;
+  not-planned:649) printf '{"number":%s,"state":"closed","state_reason":"not_planned"}\n' "$issue" ;;
+  missing-reason:651) printf '{"number":%s,"state":"closed"}\n' "$issue" ;;
+  wrong-issue:646) printf '{"number":999,"state":"closed","state_reason":"completed"}\n' ;;
   malformed:646) printf 'not-json{{{\n' ;;
-  missing-state:647) printf '{"state_reason":"completed"}\n' ;;
+  missing-state:647) printf '{"number":%s,"state_reason":"completed"}\n' "$issue" ;;
   empty-payload:648) printf '' ;;
-  null-state:652) printf '{"state":null,"state_reason":null}\n' ;;
-  *) printf '{"state":"closed","state_reason":"completed"}\n' ;;
+  null-state:652) printf '{"number":%s,"state":null,"state_reason":null}\n' "$issue" ;;
+  *) printf '{"number":%s,"state":"closed","state_reason":"completed"}\n' "$issue" ;;
 esac
 GH
 chmod +x "$tmp/bin/gh"
@@ -67,7 +68,7 @@ grep -q "Final release completion gate passed" "$tmp/pass.out" ||
   fails "success output missing"
 
 # --- 2. Every refusal mode of the issue-state reader. ----------------------
-for mode in open not-planned api-error missing-reason malformed missing-state empty-payload null-state; do
+for mode in open not-planned api-error wrong-issue missing-reason malformed missing-state empty-payload null-state; do
   if FAKE_GH_MODE="$mode" run_gate > "$tmp/$mode.out" 2>&1; then
     fails "gate accepted failure mode $mode"
     cat "$tmp/$mode.out" >&2
@@ -140,8 +141,24 @@ refuse_manifest "empty-reason" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"","approved_by":"owner","approved_at":"2026-11-01"}]}'
 refuse_manifest "empty-approved-by" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"","approved_at":"2026-11-01"}]}'
+refuse_manifest "whitespace-reason" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":" \t","approved_by":"owner","approved_at":"2026-11-01"}]}'
+refuse_manifest "whitespace-approved-by" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"   ","approved_at":"2026-11-01"}]}'
 refuse_manifest "bad-date" \
   '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"01/11/2026"}]}'
+refuse_manifest "impossible-date" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2026-02-30"}]}'
+refuse_manifest "numeric-date" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":123}]}'
+refuse_manifest "numeric-reason" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":123,"approved_by":"owner","approved_at":"2026-11-01"}]}'
+refuse_manifest "numeric-approver" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":123,"approved_at":"2026-11-01"}]}'
+# The issue identifier must be an integer, not a numeric-looking string.
+# Otherwise 649 and "649" compare as distinct in jq's duplicate grouping.
+refuse_manifest "string-issue" \
+  '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2026-11-01"},{"issue":"649","reason":"r2","approved_by":"owner","approved_at":"2026-11-01"}]}'
 refuse_manifest "not-a-blocker" \
   '{"release":"v9.9.9","exclusions":[{"issue":123,"reason":"r","approved_by":"owner","approved_at":"2026-11-01"}]}' \
   "which is not a release blocker"
@@ -150,6 +167,56 @@ refuse_manifest "duplicate" \
   "more than once"
 refuse_manifest "not-json" '{"release":"v9.9.9","exclusions":[' "is not valid JSON"
 refuse_manifest "no-exclusions-array" '{"release":"v9.9.9"}'
+
+# The duplicate-check jq command must itself be fail-closed. Bash suppresses
+# errexit inside validate_manifest because the caller invokes it under !.
+real_jq="$(command -v jq)"
+cat > "$tmp/bin/jq" <<'JQ'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "${FAKE_JQ_FAIL_DUPLICATES:-}" == 1 && "$arg" == *'group_by(.)'* ]]; then
+    echo "simulated duplicate-check parser failure" >&2
+    exit 42
+  fi
+  if [[ "${FAKE_JQ_FAIL_RELEASE:-}" == 1 && "$arg" == '.release // ""' ]]; then
+    echo v9.9.9
+    exit 42
+  fi
+  if [[ "${FAKE_JQ_FAIL_STATE:-}" == 1 && "$arg" == '.state // "unknown"' ]]; then
+    echo closed
+    exit 42
+  fi
+  if [[ "${FAKE_JQ_FAIL_REASON:-}" == 1 && "$arg" == '.state_reason // "none"' ]]; then
+    echo completed
+    exit 42
+  fi
+done
+exec "$REAL_JQ" "$@"
+JQ
+chmod +x "$tmp/bin/jq"
+export REAL_JQ="$real_jq"
+printf '%s\n' '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2026-11-01"}]}' > "$work/docs/releases/v9.9.9-exclusions.json"
+if FAKE_JQ_FAIL_DUPLICATES=1 run_gate --version v9.9.9 > "$tmp/jq-duplicates.out" 2>&1; then
+  fails "gate accepted a failed duplicate validation query"
+fi
+grep -q "could not validate exclusion duplicates" "$tmp/jq-duplicates.out" ||
+  fails "duplicate parser failure message missing"
+
+if FAKE_JQ_FAIL_RELEASE=1 run_gate --version v9.9.9 > "$tmp/jq-release.out" 2>&1; then
+  fails "gate accepted release query output from a failing parser"
+fi
+if (unset FAKE_GH_CLOSED; FAKE_JQ_FAIL_STATE=1 run_gate) > "$tmp/jq-state.out" 2>&1; then
+  fails "gate accepted issue state output from a failing parser"
+fi
+if (unset FAKE_GH_CLOSED; FAKE_JQ_FAIL_REASON=1 run_gate) > "$tmp/jq-reason.out" 2>&1; then
+  fails "gate accepted issue reason output from a failing parser"
+fi
+
+# Valid leap days remain accepted.
+printf '%s\n' '{"release":"v9.9.9","exclusions":[{"issue":649,"reason":"r","approved_by":"owner","approved_at":"2024-02-29"}]}' > "$work/docs/releases/v9.9.9-exclusions.json"
+if ! run_gate --version v9.9.9 > "$tmp/leap-date.out" 2>&1; then
+  fails "gate rejected a valid leap date"
+fi
 
 # 3f. A manifest that omits the closed-but-not-completed issue is refused.
 printf '{"release":"v9.9.9","exclusions":[]}\n' > "$work/docs/releases/v9.9.9-exclusions.json"
@@ -189,9 +256,22 @@ fi
 grep -q "the manifest is not used" "$tmp/unused.out" ||
   fails "unused-manifest note missing"
 
+# 3j. An OPEN blocker plus a present manifest must fail AND must not print the
+# "manifest is not used / every blocker closed with acceptance evidence" note,
+# which would contradict the ::error:: lines in the same log.
+if (cd "$work" && FAKE_GH_MODE=open bash "$gate" --version v9.9.9) > "$tmp/open-with-manifest.out" 2>&1; then
+  fails "gate accepted an OPEN blocker while a manifest was present"
+fi
+if grep -q "every blocker closed with acceptance evidence" "$tmp/open-with-manifest.out"; then
+  fails "open-blocker log claims every blocker closed with acceptance evidence"
+fi
+grep -q "Refusing to publish" "$tmp/open-with-manifest.out" ||
+  fails "open-blocker-with-manifest refusal line missing"
+
 if ((failures != 0)); then
   echo "FINAL RELEASE GATE TEST FAILED (${failures} case(s))" >&2
   exit 1
 fi
 
-echo "FINAL RELEASE GATE TEST PASS (success plus open, not_planned, API error, missing-reason, malformed, missing-state, empty-payload, null-state, 15 version-scoped exclusion-manifest cases, and the unused-manifest case)"
+PATH="${PATH#"$tmp/bin:"}" python3 .github/scripts/test-v025-completion.py
+echo "FINAL RELEASE GATE TEST PASS (issue-state refusals, version-scoped manifest validation, unused manifest and open-blocker log cases)"

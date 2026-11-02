@@ -13,8 +13,8 @@ import (
 // persist of a cloned state) share exactly the same transition logic.
 // All methods assume the caller holds the store lock and operate on the
 // receiver in place; FileStore applies them to a clone and only swaps
-// the clone in after a successful persist, so a persist failure can
-// never leave memory ahead of disk.
+// it in after persistence succeeds. A post-rename durability error leaves
+// the instance unavailable until it is closed and reopened.
 type storeState struct {
 	drafts    map[string]Definition
 	revisions map[string][]PublishedDefinition
@@ -120,6 +120,10 @@ func (s *storeState) listDrafts() []Definition {
 }
 
 func (s *storeState) publish(definitionID, publishedBy string, now time.Time) (PublishedDefinition, error) {
+	return s.publishIfUnchanged(definitionID, publishedBy, "", now)
+}
+
+func (s *storeState) publishIfUnchanged(definitionID, publishedBy, expectedHash string, now time.Time) (PublishedDefinition, error) {
 	draft, ok := s.drafts[definitionID]
 	if !ok {
 		return PublishedDefinition{}, ErrNotFound
@@ -127,6 +131,9 @@ func (s *storeState) publish(definitionID, publishedBy string, now time.Time) (P
 	hash, err := ContentHash(&draft)
 	if err != nil {
 		return PublishedDefinition{}, err
+	}
+	if expectedHash != "" && hash != expectedHash {
+		return PublishedDefinition{}, ErrStateConflict
 	}
 	existing := s.revisions[definitionID]
 	if len(existing) > 0 {
@@ -345,6 +352,13 @@ func (s *storeState) appendNodeExecution(exec NodeExecution, now time.Time) (Nod
 	if _, ok := s.runs[exec.RunID]; !ok {
 		return NodeExecution{}, ErrNotFound
 	}
+	if exec.AppendOperationID != "" {
+		for _, existing := range s.nodes[exec.RunID] {
+			if existing != nil && existing.NodeID == exec.NodeID && existing.AppendOperationID == exec.AppendOperationID {
+				return cloneNodeExec(*existing), nil
+			}
+		}
+	}
 	attempt := 0
 	if cur := s.currentAttempt(exec.RunID, exec.NodeID); cur != nil {
 		attempt = cur.Attempt + 1
@@ -382,6 +396,7 @@ func (s *storeState) saveNodeExecution(exec NodeExecution, expected NodeState, n
 		return NodeExecution{}, ErrStateConflict
 	}
 	exec.IdempotencyKey = cur.IdempotencyKey
+	exec.AppendOperationID = cur.AppendOperationID
 	exec.CreatedAt = cur.CreatedAt
 	exec.Input = deepCopyMap(exec.Input)
 	exec.Output = deepCopyMap(exec.Output)

@@ -10,8 +10,10 @@ import (
 
 // Store errors. ErrNotFound, ErrAlreadyExists, ErrIdempotencyConflict,
 // ErrTerminalState and ErrStateConflict are the only error values a
-// Store implementation returns for its own contract violations; I/O and
-// driver errors pass through unwrapped so callers can see the cause.
+// Store implementation returns for its own contract violations. I/O and
+// driver errors may be wrapped; errors.Is/errors.As preserve their causes.
+// A Postgres transaction commit error may be ErrPostgresCommitUncertain and
+// must be reconciled before retrying non-idempotent operations.
 var (
 	ErrNotFound            = errors.New("nexaflow: not found")
 	ErrAlreadyExists       = errors.New("nexaflow: already exists")
@@ -99,12 +101,16 @@ type NodeExecution struct {
 	Ambiguous       bool           `json:"ambiguous,omitempty"`
 	Deadline        time.Time      `json:"deadline,omitempty"`
 	IdempotencyKey  string         `json:"idempotency_key,omitempty"`
-	LeaseOwner      string         `json:"lease_owner,omitempty"`
-	LeaseUntil      time.Time      `json:"lease_until,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	StartedAt       time.Time      `json:"started_at,omitempty"`
-	FinishedAt      time.Time      `json:"finished_at,omitempty"`
+	// AppendOperationID identifies one logical append within this run/node.
+	// Reuse it only to replay the same operation. Empty preserves legacy,
+	// non-idempotent append behavior. Distinct attempts require distinct IDs.
+	AppendOperationID string    `json:"append_operation_id,omitempty"`
+	LeaseOwner        string    `json:"lease_owner,omitempty"`
+	LeaseUntil        time.Time `json:"lease_until,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	StartedAt         time.Time `json:"started_at,omitempty"`
+	FinishedAt        time.Time `json:"finished_at,omitempty"`
 }
 
 // Approval is one operator decision for an approval or operator-policy
@@ -153,6 +159,14 @@ type RunFilter struct {
 // same contract for tests and single-process use; they must never be
 // presented as production run history. The production store is
 // PostgresStore.
+// ConditionalPublisher provides atomic compare-and-publish for the service.
+// The store must compare the complete draft hash and publish under the same
+// lock or database transaction. External Store implementations must implement
+// it before they can publish through Service; an unchecked fallback is unsafe.
+type ConditionalPublisher interface {
+	PublishIfUnchanged(ctx context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error)
+}
+
 type Store interface {
 	// Drafts and revisions.
 	SaveDraft(ctx context.Context, def Definition) error

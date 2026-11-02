@@ -3,11 +3,13 @@
 
 The Go gateway, persistence, routing mutations and snapshot reads are real. Only
 provider discovery/check/test calls are intercepted at the browser boundary so
-this suite is deterministic and does not contact a paid upstream provider.
+this suite is deterministic and does not contact a paid upstream provider. The
+chart lifecycle-state scenario also uses an explicitly labeled test fixture.
 """
 from __future__ import annotations
 
 import http.client
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
@@ -259,6 +261,34 @@ def main() -> None:
                 expect(page.locator(".empty-state")).to_contain_text("No real activity yet")
                 errors = [m for m in console_msgs if m[0] == "error"]
                 assert not errors, f"Console errors after first-run empty state: {errors}"
+
+                # Deterministic chart rendering fixture; not real acceptance evidence.
+                # The gateway remains real, but only this feed response is intercepted.
+                page.locator('[data-page="overview"]').click()
+                expect(page.locator('.trend-panel h2')).to_have_text('Request starts per time bucket')
+                expect(page.locator('.trend-panel [data-action="refresh-trend"]').first).to_be_enabled()
+                now = datetime.now(timezone.utc)
+                rows = [{"state": state, "started_at": (now - timedelta(seconds=5)).isoformat()}
+                        for state in ['succeeded', 'failed', 'active', 'stale', 'cancelled', 'unknown']]
+                rows.append({"state": "succeeded", "started_at": (now + timedelta(minutes=1)).isoformat()})
+                chart_url = '**/admin/api/activity/requests?*'
+                def chart_fixture(route):
+                    route.fulfill(status=200, content_type='application/json', body=json.dumps({"requests": rows}))
+                page.route(chart_url, chart_fixture)
+                page.locator('.trend-panel [data-action="refresh-trend"]').first.click()
+                expect(page.locator('.trend-legend')).to_contain_text('Started 6')
+                for kind in ['ok', 'failed', 'active', 'stale', 'cancelled', 'other']:
+                    expect(page.locator('.trend-svg .trend-bar.' + kind)).to_have_count(1)
+                expect(page.locator('.trend-panel')).to_contain_text('1 outside the window')
+                chart_evidence = (evidence_root or ROOT / 'docs/browser-evidence/privacy') / 'chart-test-fixture'
+                chart_evidence.mkdir(parents=True, exist_ok=True)
+                page.locator('.trend-panel').screenshot(path=str(chart_evidence / 'lifecycle-fixture-1440.png'))
+                page.set_viewport_size({"width": 390, "height": 844})
+                page.locator('.trend-panel').screenshot(path=str(chart_evidence / 'lifecycle-fixture-390.png'))
+                page.set_viewport_size({"width": 1440, "height": 900})
+                page.unroute(chart_url, chart_fixture)
+                page.locator('.trend-panel [data-action="trend-activity"]').click()
+                expect(page.locator('[data-page="activity"]')).to_have_class(re.compile(r'\bactive\b'))
 
                 # --- PRIVACY P3 TESTS ---
                 # Go to providers page

@@ -1,5 +1,5 @@
 {
-  "_comment": "Owner-approved scope exclusions for v0.25.0, read by .github/scripts/check-final-release-gate.sh at tag time. Every entry must stay truthful and must match docs/releases/v0.25.0.md. An entry is only valid once 'approved_by' names the owner who accepted the exclusion and 'approved_at' records the date of that decision; until then the release gate fails closed. Never add an entry for an issue that is still open, and never copy this file forward to a later release: exclusions are version-scoped.",
+  "_comment": "Historical unsigned proposal retained for audit history only. The owner chose completion-only for v0.25.0; no entry may be approved or used to waive acceptance. This non-empty file intentionally blocks the v0.25.0 gate until it is replaced with an empty manifest or removed as part of an authorized reviewed release preparation.",
   "release": "v0.25.0",
   "exclusions": [
     {
@@ -52,7 +52,7 @@
     },
     {
       "issue": 654,
-      "reason": "Umbrella blocker. It is closed with this release only because every one of its remaining scopes was completed or explicitly excluded above; the umbrella carries no verification of its own.",
+      "reason": "Umbrella blocker. Any proposed exclusion requires a separate owner decision after every remaining scope is completed or explicitly excluded; the umbrella carries no verification of its own.",
       "approved_by": "",
       "approved_at": ""
     }

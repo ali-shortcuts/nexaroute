@@ -438,7 +438,7 @@ func TestGap2ComfyUIDownloadContentTypeFallbacks(t *testing.T) {
 	}{
 		{"charset suffix stripped", "video/mp4; charset=binary", "clip.mp4", "video/mp4"},
 		{"octet-stream with mp4 extension guessed", "application/octet-stream", "clip.mp4", "video/mp4"},
-		{"octet-stream with unknown extension falls back", "application/octet-stream", "clip.xyz", "video/mp4"},
+		{"octet-stream without extension falls back", "application/octet-stream", "clip", "video/mp4"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -467,6 +467,25 @@ func TestGap2ComfyUIDownloadContentTypeFallbacks(t *testing.T) {
 			}
 		})
 	}
+	t.Run("octet-stream with a known non-video extension is rejected", func(t *testing.T) {
+		srv := serve("application/octet-stream")
+		defer srv.Close()
+		p, err := NewComfyUI(comfyTestConfig(comfyWorkflowFile(t), srv.URL), 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		status := gap2ComfyOutputStatus()
+		status.Outputs[0].Filename = "clip.txt"
+		status.Outputs[0].Metadata["filename"] = "clip.txt"
+		sink, err := storage.NewLocal(t.TempDir(), 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := p.DownloadOutputs(context.Background(), status, sink); err == nil || !strings.Contains(err.Error(), "non-video content type") {
+			t.Fatalf("download error = %v, want non-video rejection", err)
+		}
+	})
+
 }
 
 func TestGap2ComfyUIDoJSONRequestBuildAndEmptyBody(t *testing.T) {

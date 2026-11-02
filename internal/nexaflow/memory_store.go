@@ -54,6 +54,15 @@ func (s *MemoryStore) Publish(_ context.Context, definitionID, publishedBy strin
 	return s.state.publish(definitionID, publishedBy, s.now())
 }
 
+func (s *MemoryStore) PublishIfUnchanged(_ context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error) {
+	if expectedHash == "" {
+		return PublishedDefinition{}, ErrStateConflict
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state.publishIfUnchanged(definitionID, publishedBy, expectedHash, s.now())
+}
+
 func (s *MemoryStore) SupersedeRevision(_ context.Context, definitionID string, revision uint64) (PublishedDefinition, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

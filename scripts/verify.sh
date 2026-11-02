@@ -42,6 +42,8 @@ python3 scripts/test-oidc-runner-acceptance.py
 echo '== web ui javascript syntax =='
 node --check internal/httpapi/web/app.js
 node --check internal/httpapi/web/visual-agent.js
+node scripts/test-workflow-config.js
+node scripts/test-activity-refresh.js
 echo '== real browser control-plane acceptance =='
 # The runner reports PASS, FAIL or SKIPPED per suite and exits non-zero
 # on FAIL (1) or SKIPPED (2). A local skip is NOT a pass: it is printed

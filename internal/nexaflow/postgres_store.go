@@ -13,6 +13,18 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // PostgreSQL driver for this adapter
 )
 
+// ErrPostgresCommitUncertain indicates that PostgreSQL did not confirm a
+// transaction commit. The transaction may have committed. Reconcile durable
+// state before any retry; AppendNodeExecution is not replay-idempotent.
+var ErrPostgresCommitUncertain = errors.New("nexaflow: postgres commit outcome uncertain; reconcile before retry")
+
+func commitPostgres(tx *sql.Tx) error {
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: %w", ErrPostgresCommitUncertain, err)
+	}
+	return nil
+}
+
 // PostgreSQL workflow store (Phase 2): the Store contract over five
 // tables for multi-process deployments where the file store cannot be
 // shared. Semantics match the memory store (the shared store-contract
@@ -159,18 +171,18 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 			return fmt.Errorf("nexaflow: workflow migration statement: %w", err)
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return fmt.Errorf("nexaflow: commit workflow migration: %w", err)
 	}
 	return nil
 }
 
-func mustJSON(v any) []byte {
+func encodeStoreJSON(v any) ([]byte, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
-		return []byte("{}")
+		return nil, fmt.Errorf("nexaflow: encode postgres store JSON: %w", err)
 	}
-	return raw
+	return raw, nil
 }
 
 func (s *PostgresStore) SaveDraft(ctx context.Context, def Definition) error {
@@ -178,10 +190,14 @@ func (s *PostgresStore) SaveDraft(ctx context.Context, def Definition) error {
 		return errors.New("nexaflow: definition id is required")
 	}
 	canon := cloneDefinition(def)
-	_, err := s.db.ExecContext(ctx,
+	raw, err := encodeStoreJSON(canon)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO `+wfDefsTable+` (definition_id, draft, updated_at) VALUES ($1, $2, clock_timestamp())
 		 ON CONFLICT (definition_id) DO UPDATE SET draft = EXCLUDED.draft, updated_at = clock_timestamp()`,
-		def.ID, mustJSON(canon))
+		def.ID, raw)
 	return err
 }
 
@@ -223,6 +239,17 @@ func (s *PostgresStore) ListDrafts(ctx context.Context) ([]Definition, error) {
 }
 
 func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy string) (PublishedDefinition, error) {
+	return s.publish(ctx, definitionID, publishedBy, "")
+}
+
+func (s *PostgresStore) PublishIfUnchanged(ctx context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error) {
+	if expectedHash == "" {
+		return PublishedDefinition{}, ErrStateConflict
+	}
+	return s.publish(ctx, definitionID, publishedBy, expectedHash)
+}
+
+func (s *PostgresStore) publish(ctx context.Context, definitionID, publishedBy, expectedHash string) (PublishedDefinition, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return PublishedDefinition{}, err
@@ -244,6 +271,9 @@ func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy s
 	hash, err := ContentHash(&draft)
 	if err != nil {
 		return PublishedDefinition{}, err
+	}
+	if expectedHash != "" && hash != expectedHash {
+		return PublishedDefinition{}, ErrStateConflict
 	}
 	var lastHash, lastStatus string
 	var lastRev int64
@@ -267,7 +297,7 @@ func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy s
 		if err := json.Unmarshal(lastDef, &def); err != nil {
 			return PublishedDefinition{}, err
 		}
-		if err := tx.Commit(); err != nil {
+		if err := commitPostgres(tx); err != nil {
 			return PublishedDefinition{}, err
 		}
 		// Same guard as above, repeated at the conversion site:
@@ -288,6 +318,10 @@ func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy s
 	if errors.Is(err, sql.ErrNoRows) {
 		next = 1
 	}
+	encodedDraft, err := encodeStoreJSON(draft)
+	if err != nil {
+		return PublishedDefinition{}, err
+	}
 	now := time.Now()
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE `+wfRevsTable+` SET status = $1 WHERE definition_id = $2 AND status = $3`,
@@ -296,10 +330,10 @@ func (s *PostgresStore) Publish(ctx context.Context, definitionID, publishedBy s
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO `+wfRevsTable+` (definition_id, revision, content_hash, definition, status, published_by, published_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		definitionID, next, hash, mustJSON(draft), string(DefinitionPublished), publishedBy, now); err != nil {
+		definitionID, next, hash, encodedDraft, string(DefinitionPublished), publishedBy, now); err != nil {
 		return PublishedDefinition{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return PublishedDefinition{}, err
 	}
 	return PublishedDefinition{
@@ -336,7 +370,7 @@ func (s *PostgresStore) SupersedeRevision(ctx context.Context, definitionID stri
 		}
 		return PublishedDefinition{}, ErrStateConflict
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return PublishedDefinition{}, err
 	}
 	return s.GetRevision(ctx, definitionID, revision)
@@ -447,6 +481,18 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 		run.State = RunCreated
 	}
 	run.Definition = cloneDefinition(run.Definition)
+	definitionJSON, err := encodeStoreJSON(run.Definition)
+	if err != nil {
+		return err
+	}
+	rolesJSON, err := encodeStoreJSON(run.PrincipalRoles)
+	if err != nil {
+		return err
+	}
+	inputJSON, err := encodeStoreJSON(deepCopyMap(run.Input))
+	if err != nil {
+		return err
+	}
 	now := time.Now()
 	// The admission cap must be atomic across processes sharing
 	// this database: a transaction-scoped advisory lock serializes
@@ -474,8 +520,8 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 	}
 	_, err = tx.ExecContext(ctx,
 		`INSERT INTO `+wfRunsTable+` (`+runColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-		run.ID, run.DefinitionID, run.Revision, mustJSON(run.Definition), string(run.State),
-		run.IdempotencyKey, run.Principal, mustJSON(run.PrincipalRoles), mustJSON(deepCopyMap(run.Input)),
+		run.ID, run.DefinitionID, run.Revision, definitionJSON, string(run.State),
+		run.IdempotencyKey, run.Principal, rolesJSON, inputJSON,
 		run.ErrorCode, run.Error, now, now, nullTime(run.StartedAt), nullTime(run.FinishedAt),
 		run.LeaseOwner, nullTime(run.LeaseUntil))
 	if err != nil {
@@ -488,7 +534,7 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 		}
 		return err
 	}
-	return tx.Commit()
+	return commitPostgres(tx)
 }
 
 func nullTime(t time.Time) any {
@@ -556,7 +602,7 @@ func (s *PostgresStore) UpdateRunState(ctx context.Context, runID string, expect
 		runID, string(state), errorCode, errMsg, now, nullTime(started), nullTime(finished)); err != nil {
 		return Run{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return Run{}, err
 	}
 	cur.State = state
@@ -610,19 +656,38 @@ func (s *PostgresStore) Prune(ctx context.Context, before time.Time) (int, error
 	}
 	defer tx.Rollback()
 	terminal := []string{string(RunSucceeded), string(RunFailed), string(RunCancelled)}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM `+wfNodesTable+` WHERE run_id IN (SELECT run_id FROM `+wfRunsTable+` WHERE state = ANY($1) AND finished_at IS NOT NULL AND finished_at < $2)`,
-		terminal, before); err != nil {
+	// READ COMMITTED gives each statement a new snapshot. Freeze and lock
+	// the eligible run set before deleting any child rows; otherwise a run
+	// finishing between DELETEs can be deleted without its nodes. Ordering
+	// also ensures concurrent pruners acquire parent locks consistently.
+	rows, err := tx.QueryContext(ctx, `SELECT run_id FROM `+wfRunsTable+` WHERE state = ANY($1) AND finished_at IS NOT NULL AND finished_at < $2 ORDER BY run_id FOR UPDATE`, terminal, before)
+	if err != nil {
 		return 0, err
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM `+wfApprovalsTable+` WHERE run_id IN (SELECT run_id FROM `+wfRunsTable+` WHERE state = ANY($1) AND finished_at IS NOT NULL AND finished_at < $2)`,
-		terminal, before); err != nil {
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx,
-		`DELETE FROM `+wfRunsTable+` WHERE state = ANY($1) AND finished_at IS NOT NULL AND finished_at < $2`,
-		terminal, before)
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM `+wfNodesTable+` WHERE run_id = ANY($1)`, ids); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM `+wfApprovalsTable+` WHERE run_id = ANY($1)`, ids); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM `+wfRunsTable+` WHERE run_id = ANY($1)`, ids)
 	if err != nil {
 		return 0, err
 	}
@@ -630,7 +695,7 @@ func (s *PostgresStore) Prune(ctx context.Context, before time.Time) (int, error
 	if err != nil {
 		return 0, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return 0, err
 	}
 	return int(n), nil
@@ -661,17 +726,33 @@ func scanNode(row interface{ Scan(...any) error }) (NodeExecution, error) {
 }
 
 func (s *PostgresStore) AppendNodeExecution(ctx context.Context, exec NodeExecution) (NodeExecution, error) {
+	if _, err := encodeStoreJSON(exec); err != nil {
+		return NodeExecution{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return NodeExecution{}, err
 	}
 	defer tx.Rollback()
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+wfRunsTable+` WHERE run_id = $1)`, exec.RunID).Scan(&exists); err != nil {
+	// Serialize appends for a run, including the first attempt when no node
+	// row exists. This protects MAX(attempt)+1 and the operation lookup.
+	var lockedRun string
+	err = tx.QueryRowContext(ctx, `SELECT run_id FROM `+wfRunsTable+` WHERE run_id = $1 FOR UPDATE`, exec.RunID).Scan(&lockedRun)
+	if errors.Is(err, sql.ErrNoRows) {
+		return NodeExecution{}, ErrNotFound
+	}
+	if err != nil {
 		return NodeExecution{}, err
 	}
-	if !exists {
-		return NodeExecution{}, ErrNotFound
+	if exec.AppendOperationID != "" {
+		row := tx.QueryRowContext(ctx, `SELECT run_id, node_id, attempt, payload, state, lease_owner, lease_until FROM `+wfNodesTable+` WHERE run_id=$1 AND node_id=$2 AND payload->>'append_operation_id'=$3 LIMIT 1`, exec.RunID, exec.NodeID, exec.AppendOperationID)
+		existing, err := scanNode(row)
+		if err == nil {
+			return existing, nil
+		} // read-only; deferred rollback releases the lock
+		if !errors.Is(err, sql.ErrNoRows) {
+			return NodeExecution{}, err
+		}
 	}
 	var maxAttempt sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(attempt) FROM `+wfNodesTable+` WHERE run_id = $1 AND node_id = $2`, exec.RunID, exec.NodeID).Scan(&maxAttempt); err != nil {
@@ -689,18 +770,25 @@ func (s *PostgresStore) AppendNodeExecution(ctx context.Context, exec NodeExecut
 	now := time.Now()
 	exec.CreatedAt = now
 	exec.UpdatedAt = now
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO `+wfNodesTable+` (run_id, node_id, attempt, payload, state, lease_owner, lease_until) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		exec.RunID, exec.NodeID, attempt, mustJSON(exec), string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
+	payload, err := encodeStoreJSON(exec)
+	if err != nil {
 		return NodeExecution{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO `+wfNodesTable+` (run_id, node_id, attempt, payload, state, lease_owner, lease_until) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		exec.RunID, exec.NodeID, attempt, payload, string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
+		return NodeExecution{}, err
+	}
+	if err := commitPostgres(tx); err != nil {
 		return NodeExecution{}, err
 	}
 	return exec, nil
 }
 
 func (s *PostgresStore) SaveNodeExecution(ctx context.Context, exec NodeExecution, expected NodeState) (NodeExecution, error) {
+	if _, err := encodeStoreJSON(exec); err != nil {
+		return NodeExecution{}, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return NodeExecution{}, err
@@ -739,6 +827,7 @@ func (s *PostgresStore) SaveNodeExecution(ctx context.Context, exec NodeExecutio
 		return NodeExecution{}, ErrStateConflict
 	}
 	exec.IdempotencyKey = cur.IdempotencyKey
+	exec.AppendOperationID = cur.AppendOperationID
 	exec.CreatedAt = cur.CreatedAt
 	if exec.State.Terminal() {
 		exec.LeaseOwner = ""
@@ -752,12 +841,16 @@ func (s *PostgresStore) SaveNodeExecution(ctx context.Context, exec NodeExecutio
 		exec.FinishedAt = now
 	}
 	exec.UpdatedAt = now
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE `+wfNodesTable+` SET payload = $4, state = $5, lease_owner = $6, lease_until = $7 WHERE run_id = $1 AND node_id = $2 AND attempt = $3`,
-		exec.RunID, exec.NodeID, exec.Attempt, mustJSON(exec), string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
+	payload, err := encodeStoreJSON(exec)
+	if err != nil {
 		return NodeExecution{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE `+wfNodesTable+` SET payload = $4, state = $5, lease_owner = $6, lease_until = $7 WHERE run_id = $1 AND node_id = $2 AND attempt = $3`,
+		exec.RunID, exec.NodeID, exec.Attempt, payload, string(exec.State), exec.LeaseOwner, nullTime(exec.LeaseUntil)); err != nil {
+		return NodeExecution{}, err
+	}
+	if err := commitPostgres(tx); err != nil {
 		return NodeExecution{}, err
 	}
 	return exec, nil
@@ -825,7 +918,6 @@ func (s *PostgresStore) TryClaim(ctx context.Context, runID, nodeID, owner strin
 	if errors.Is(err, sql.ErrNoRows) {
 		// No row matched: a live foreign lease blocks, or the state
 		// is not claimable. Either way the claim loses, without error.
-		_ = tx.Commit()
 		return NodeExecution{}, false, nil
 	}
 	if err != nil {
@@ -843,7 +935,7 @@ func (s *PostgresStore) TryClaim(ctx context.Context, runID, nodeID, owner strin
 	e.Input = deepCopyMap(e.Input)
 	e.Output = deepCopyMap(e.Output)
 	e.ResumeInput = deepCopyMap(e.ResumeInput)
-	if err := tx.Commit(); err != nil {
+	if err := commitPostgres(tx); err != nil {
 		return NodeExecution{}, false, err
 	}
 	return e, true, nil
@@ -870,36 +962,42 @@ func (s *PostgresStore) RecordApproval(ctx context.Context, appr Approval) (Appr
 		return Approval{}, err
 	}
 	defer tx.Rollback()
-	var prevDecision, prevApprover string
-	err = tx.QueryRowContext(ctx,
-		`SELECT decision, approver FROM `+wfApprovalsTable+` WHERE run_id = $1 AND node_id = $2 FOR UPDATE`,
-		appr.RunID, appr.NodeID).Scan(&prevDecision, &prevApprover)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	// A missing row cannot be protected by SELECT FOR UPDATE. Insert first
+	// with ON CONFLICT so concurrent first decisions serialize on the unique
+	// key; only the winner inserts, and losers read the committed record.
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	result, err := tx.ExecContext(ctx,
+		`INSERT INTO `+wfApprovalsTable+` (run_id, node_id, requester, approver, decision, decided_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (run_id, node_id) DO NOTHING`,
+		appr.RunID, appr.NodeID, appr.Requester, appr.Approver, appr.Decision, now)
+	if err != nil {
 		return Approval{}, err
 	}
-	if err == nil {
-		if prevDecision == appr.Decision && prevApprover == appr.Approver {
-			var decidedAt time.Time
-			_ = tx.QueryRowContext(ctx,
-				`SELECT decided_at FROM `+wfApprovalsTable+` WHERE run_id = $1 AND node_id = $2`,
-				appr.RunID, appr.NodeID).Scan(&decidedAt)
-			_ = tx.Commit()
-			appr.DecidedAt = decidedAt
-			return appr, nil
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return Approval{}, err
+	}
+	if inserted == 1 {
+		if err := commitPostgres(tx); err != nil {
+			return Approval{}, err
 		}
+		appr.DecidedAt = now
+		return appr, nil
+	}
+	var prevDecision, prevApprover, prevRequester string
+	var decidedAt time.Time
+	err = tx.QueryRowContext(ctx,
+		`SELECT decision, approver, requester, decided_at FROM `+wfApprovalsTable+` WHERE run_id = $1 AND node_id = $2 FOR UPDATE`,
+		appr.RunID, appr.NodeID).Scan(&prevDecision, &prevApprover, &prevRequester, &decidedAt)
+	if err != nil {
+		return Approval{}, err
+	}
+	if prevDecision != appr.Decision || prevApprover != appr.Approver {
 		return Approval{}, ErrApprovalConflict
 	}
-	now := time.Now()
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO `+wfApprovalsTable+` (run_id, node_id, requester, approver, decision, decided_at) VALUES ($1, $2, $3, $4, $5, $6)`,
-		appr.RunID, appr.NodeID, appr.Requester, appr.Approver, appr.Decision, now); err != nil {
-		return Approval{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return Approval{}, err
-	}
-	appr.DecidedAt = now
+	appr.Requester = prevRequester
+	appr.DecidedAt = decidedAt
 	return appr, nil
+
 }
 
 func (s *PostgresStore) GetApproval(ctx context.Context, runID, nodeID string) (Approval, error) {

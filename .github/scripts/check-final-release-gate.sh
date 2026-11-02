@@ -2,11 +2,11 @@
 # Final release completion gate.
 #
 # Every product acceptance blocker (#646-#653) and the umbrella (#654) must be
-# CLOSED before a stable release may be published. A blocker that closed as
-# "completed" is accepted as-is. A blocker that closed any other way
-# (for example state_reason=not_planned) is accepted ONLY when the release
-# notes for the version being tagged carry an explicit, owner-approved
-# exclusion for it in docs/releases/<version>-exclusions.json.
+# CLOSED before a stable release may be published. For v0.25.0 only completed
+# closures with current provenance metadata are accepted, and no exclusions are
+# allowed. Independent review of the evidence remains mandatory. For other
+# versions, a non-completed closure may use the generic owner-approved,
+# version-scoped exclusion mechanism in docs/releases/<version>-exclusions.json.
 #
 # This is not a way to hide an open blocker:
 #   * an OPEN issue always fails the gate, excluded or not;
@@ -32,7 +32,15 @@ usage() {
 }
 
 version=""
-if [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
+tag_ref=""
+if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+  tag_ref="${GITHUB_REF#refs/tags/}"
+  if [[ -n "${GITHUB_REF_NAME:-}" && "$GITHUB_REF_NAME" != "$tag_ref" ]]; then
+    echo "::error::Tag ref and ref name disagree; refusing to determine release policy." >&2
+    exit 2
+  fi
+  version="$tag_ref"
+elif [[ -n "${GITHUB_REF_NAME:-}" && "${GITHUB_REF_NAME}" =~ ^v[0-9] ]]; then
   version="${GITHUB_REF_NAME}"
 fi
 while (($#)); do
@@ -57,6 +65,12 @@ while (($#)); do
   esac
 done
 
+# A caller cannot override the actual v0.25.0 tag into a different policy.
+if [[ ( "${GITHUB_REF_NAME:-}" == "v0.25.0" || "$tag_ref" == "v0.25.0" ) && "$version" != "v0.25.0" ]]; then
+  echo "::error::Cannot override the v0.25.0 completion-only release policy." >&2
+  exit 2
+fi
+
 if [[ -n "$version" && ! "$version" =~ ^v[0-9][a-zA-Z0-9._-]*$ ]]; then
   echo "::error::Invalid release version '${version}'; expected vX.Y.Z." >&2
   exit 2
@@ -65,6 +79,53 @@ fi
 exclusions_file=""
 if [[ -n "$version" ]]; then
   exclusions_file="docs/releases/${version}-exclusions.json"
+fi
+
+# Owner-directed completion-only policy for v0.25.0. Other releases retain the
+# generic #822 exclusion mechanism below. Any v0.25.0 manifest must be a valid
+# empty array; signed and unsigned exclusions alike can never waive a blocker.
+strict_v025=0
+if [[ "$version" == "v0.25.0" ]]; then
+  strict_v025=1
+  if [[ -f "$exclusions_file" ]] && ! jq -e --arg v "$version" \
+    --slurp 'length == 1 and (.[0] | type == "object" and .release == $v and (.exclusions | type == "array" and length == 0))' \
+    "$exclusions_file" >/dev/null 2>&1; then
+    echo "::error::v0.25.0 permits no exclusions; its manifest must be valid and empty." >&2
+    exit 1
+  fi
+  # jq accepts duplicate keys with last-value-wins semantics. Reject ambiguous
+  # JSON even when its final exclusions member appears empty.
+  if [[ -f "$exclusions_file" ]] && ! python3 - "$exclusions_file" <<'PYJSON'
+import json
+import sys
+
+def unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate key")
+        result[key] = value
+    return result
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as file:
+        json.load(file, object_pairs_hook=unique)
+except (OSError, UnicodeError, ValueError):
+    sys.exit(1)
+PYJSON
+  then
+    echo "::error::v0.25.0 manifest is unreadable or has ambiguous JSON." >&2
+    exit 1
+  fi
+  # Release evidence is bound to the candidate at the current main tip, not
+  # merely an ancestor or PR merge commit. API/parser errors fail closed.
+  if [[ ! "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] ||
+     ! main_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" 2>/dev/null)" ||
+     ! main_sha="$(jq -er '.object | select(.type == "commit") | .sha | select(type == "string" and test("^[0-9a-f]{40}$"))' <<<"$main_ref" 2>/dev/null)" ||
+     [[ "$main_sha" != "$GITHUB_SHA" ]]; then
+    echo "::error::v0.25.0 candidate SHA is not verifiably the current main tip." >&2
+    exit 1
+  fi
 fi
 
 # validate_manifest runs every structural check on the manifest up front and
@@ -78,7 +139,10 @@ validate_manifest() {
   fi
 
   local declared
-  declared="$(jq -r '.release // ""' "$exclusions_file")"
+  if ! declared="$(jq -r '.release // ""' "$exclusions_file")"; then
+    echo "::error::${exclusions_file}: could not read the release version." >&2
+    return 1
+  fi
   if [[ "$declared" != "$version" ]]; then
     echo "::error::${exclusions_file} declares release '${declared}' but the release being tagged is '${version}'. Exclusions are version-scoped and are never carried forward." >&2
     return 1
@@ -94,21 +158,24 @@ validate_manifest() {
 
   # Every entry must be complete, reference a required issue, and be unique.
   local problems
-  problems="$(jq -r --arg allowed "$allowed" '
+  if ! problems="$(jq -r --arg allowed "$allowed" '
     .exclusions
     | to_entries[]
     | .key as $i
     | .value as $e
     | [
         (if ($e | type) != "object" then "entry \($i) is not an object" else empty end),
-        (if (($e.issue // "") | tostring | test("^[0-9]+$")) | not then "entry \($i) has no numeric issue" else empty end),
+        (if (($e.issue | type) != "number") or ((($e.issue // "") | tostring | test("^[0-9]+$")) | not) then "entry \($i) has no integer issue" else empty end),
         (if ($allowed | contains(" " + (($e.issue // "") | tostring) + " ")) | not then "entry \($i) names issue #\($e.issue), which is not a release blocker" else empty end),
-        (if (($e.reason // "") | type) != "string" or (($e.reason // "") | length) == 0 then "entry \($i) has an empty reason" else empty end),
-        (if (($e.approved_by // "") | type) != "string" or (($e.approved_by // "") | length) == 0 then "entry \($i) has an empty approved_by" else empty end),
-        (if (($e.approved_at // "") | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) | not then "entry \($i) needs approved_at as YYYY-MM-DD" else empty end)
+        (if (($e.reason // "") | type) != "string" or (($e.reason // "") | test("[^[:space:]]") | not) then "entry \($i) has an empty reason" else empty end),
+        (if (($e.approved_by // "") | type) != "string" or (($e.approved_by // "") | test("[^[:space:]]") | not) then "entry \($i) has an empty approved_by" else empty end),
+        (if (try (($e.approved_at | type) == "string" and ($e.approved_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) and (($e.approved_at + "T00:00:00Z" | fromdateiso8601 | strftime("%Y-%m-%d")) == $e.approved_at)) catch false) | not then "entry \($i) needs a valid approved_at date as YYYY-MM-DD" else empty end)
       ]
     | .[]
-  ' "$exclusions_file")"
+  ' "$exclusions_file")"; then
+    echo "::error::${exclusions_file}: could not validate exclusion entries." >&2
+    return 1
+  fi
 
   if [[ -n "$problems" ]]; then
     while IFS= read -r line; do
@@ -118,7 +185,10 @@ validate_manifest() {
   fi
 
   local duplicates
-  duplicates="$(jq -r '[.exclusions[].issue] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$exclusions_file")"
+  if ! duplicates="$(jq -r '[.exclusions[].issue] | group_by(.) | map(select(length > 1) | .[0]) | .[]' "$exclusions_file")"; then
+    echo "::error::${exclusions_file}: could not validate exclusion duplicates." >&2
+    return 1
+  fi
   if [[ -n "$duplicates" ]]; then
     while IFS= read -r issue; do
       echo "::error::${exclusions_file} lists issue #${issue} more than once." >&2
@@ -149,6 +219,8 @@ state_dir="$(mktemp -d)"
 trap 'rm -rf "$state_dir"' EXIT
 
 failed=0
+latest_scope_closed=""
+umbrella_closed=""
 needs_exclusion=()
 for issue in "${required_issues[@]}"; do
   if ! payload="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}" 2>/dev/null)"; then
@@ -157,23 +229,74 @@ for issue in "${required_issues[@]}"; do
     printf '%s\n' "unknown none" > "$state_dir/$issue"
     continue
   fi
-  state="$(jq -r '.state // "unknown"' <<<"$payload" 2>/dev/null || true)"
-  reason="$(jq -r '.state_reason // "none"' <<<"$payload" 2>/dev/null || true)"
+  if ! jq -e --argjson expected "$issue" \
+    'type == "object" and (.number | type == "number") and .number == $expected' \
+    <<<"$payload" >/dev/null 2>&1; then
+    echo "::error::Could not verify identity of issue #${issue}." >&2
+    failed=1
+    continue
+  fi
+  if ! state="$(jq -r '.state // "unknown"' <<<"$payload" 2>/dev/null)" ||
+     ! reason="$(jq -r '.state_reason // "none"' <<<"$payload" 2>/dev/null)"; then
+    echo "::error::Could not parse release blocker #${issue}." >&2
+    failed=1
+    printf '%s\n' "unknown none" > "$state_dir/$issue"
+    continue
+  fi
   [[ -n "$state" ]] || state="unknown"
   [[ -n "$reason" ]] || reason="none"
   printf '%s %s\n' "$state" "$reason" > "$state_dir/$issue"
 
   if [[ "$state" != "closed" ]]; then
-    echo "::error::Release blocked: issue #${issue} is ${state} (state_reason=${reason}). An open blocker can never be excluded; attach acceptance evidence and close it, or close it as not_planned with a reviewed, owner-approved exclusion." >&2
+    if ((strict_v025)); then
+      echo "::error::Release blocked: issue #${issue} is ${state} (state_reason=${reason}); v0.25.0 requires completed acceptance and permits no exclusions." >&2
+    else
+      echo "::error::Release blocked: issue #${issue} is ${state} (state_reason=${reason}). An open blocker can never be excluded; attach acceptance evidence and close it, or close it as not_planned with a reviewed, owner-approved exclusion." >&2
+    fi
     failed=1
     continue
   fi
   if [[ "$reason" == "completed" ]]; then
-    echo "Release acceptance complete: #${issue}"
+    if ((strict_v025)); then
+      if ! closed_at="$(jq -er '
+        .closed_at | if type == "string" then
+          if (try (fromdateiso8601 | strftime("%Y-%m-%dT%H:%M:%SZ")) catch "") == . then . else error("invalid close date") end
+        else error("missing close date") end
+      ' <<<"$payload" 2>/dev/null)"; then
+        echo "::error::Release blocked: #${issue} has an invalid or missing completed timestamp." >&2
+        failed=1
+        continue
+      fi
+      if [[ "$issue" == "654" ]]; then
+        umbrella_closed="$closed_at"
+      elif [[ -z "$latest_scope_closed" || "$closed_at" > "$latest_scope_closed" ]]; then
+        latest_scope_closed="$closed_at"
+      fi
+    fi
+    if ((strict_v025)) && ! python3 "$(dirname "$0")/check-v025-acceptance.py" \
+      --repo "$GITHUB_REPOSITORY" --issue "$issue" --version "$version" --sha "${GITHUB_SHA:-}"; then
+      echo "::error::Release blocked: #${issue} lacks current v0.25.0 acceptance evidence metadata." >&2
+      failed=1
+    elif ((strict_v025)); then
+      echo "Issue #${issue} is completed and has matching evidence metadata; independent evidence review required."
+    else
+      echo "Release acceptance complete: #${issue}"
+    fi
+    continue
+  fi
+  if ((strict_v025)); then
+    echo "::error::Release blocked: #${issue} is not closed as completed; v0.25.0 does not allow exclusions." >&2
+    failed=1
     continue
   fi
   needs_exclusion+=("$issue")
 done
+
+if ((strict_v025)) && [[ -n "$latest_scope_closed" && -n "$umbrella_closed" ]] && \
+   [[ ! "$umbrella_closed" > "$latest_scope_closed" ]]; then
+  echo "::error::Release blocked: #654 must be closed after all individual acceptance issues." >&2
+  failed=1
+fi
 
 # PHASE 2 — resolve documented exclusions, only if a blocker actually needs one.
 excluded_issues=()
@@ -198,12 +321,24 @@ if ((${#needs_exclusion[@]} > 0)); then
       excluded_issues+=("#${issue}")
     done
   fi
-elif [[ -n "$exclusions_file" && -f "$exclusions_file" ]]; then
-  echo "Note: ${exclusions_file} exists but every blocker closed with acceptance evidence; the manifest is not used."
+elif ((failed == 0)) && [[ -n "$exclusions_file" && -f "$exclusions_file" ]]; then
+  # Only true when nothing failed: with an open blocker (or an unreadable API)
+  # the manifest is irrelevant, and claiming "every blocker closed with
+  # acceptance evidence" beside the ::error:: lines above would misreport the
+  # release state in the one log an operator is most likely to skim.
+  if ((strict_v025)); then
+    echo "Note: ${exclusions_file} is empty; issue evidence metadata matched. Independent content review remains required."
+  else
+    echo "Note: ${exclusions_file} exists but every blocker closed with acceptance evidence; the manifest is not used."
+  fi
 fi
 
 if ((failed != 0)); then
-  echo "::error::Refusing to publish. Resolve every product acceptance blocker and complete issue #654 first (or record owner-approved exclusions in ${exclusions_file:-the release notes})." >&2
+  if ((strict_v025)); then
+    echo "::error::Refusing to publish v0.25.0. Complete every acceptance blocker and close #654 last; no exclusions are permitted." >&2
+  else
+    echo "::error::Refusing to publish. Resolve every product acceptance blocker and complete issue #654 first (or record owner-approved exclusions in ${exclusions_file:-the release notes})." >&2
+  fi
   exit 1
 fi
 

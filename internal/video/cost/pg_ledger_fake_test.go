@@ -603,7 +603,7 @@ func TestPostgresLedgerFakeFailurePaths(t *testing.T) {
 		}
 	})
 
-	t.Run("release ignores store failure", func(t *testing.T) {
+	t.Run("release reports store failure", func(t *testing.T) {
 		state := &fakeCostDB{
 			rows: map[string]*fakeCostRow{
 				"job": {state: reservedState, estimated: 1, upper: 1, priceKnown: true},
@@ -611,7 +611,10 @@ func TestPostgresLedgerFakeFailurePaths(t *testing.T) {
 			failExec: "SET state = 'released'",
 		}
 		ledger := fakeCostLedger(t, state)
-		ledger.ReleaseForJob("job")
+		if err := ledger.ReleaseForJobChecked("job"); err == nil {
+			t.Fatal("checked release silently ignored store failure")
+		}
+		ledger.ReleaseForJob("job") // legacy void API logs the failure
 		if got := ledger.Reserved(); got != 1 {
 			t.Fatalf("failed release dropped reservation: reserved = %v", got)
 		}

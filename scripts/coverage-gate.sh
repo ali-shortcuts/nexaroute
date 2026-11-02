@@ -3,8 +3,9 @@
 #
 # Canonical measurement (see .github/workflows/coverage-report.yml):
 #   go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...
-# This gate reads ONLY the total line of `go tool cover -func` over that
-# profile. No package, file, or statement is excluded, and the denominator
+# This gate validates the profile with `go tool cover -func` and compares
+# the raw covered/total statement counts, not its rounded display percentage.
+# No package, file, or statement is excluded, and the denominator
 # is whatever the profile contains: excluding a package, lowering the
 # threshold, or changing the denominator to make the gate pass is not
 # acceptable. The threshold is inclusive: a total exactly equal to the
@@ -62,30 +63,68 @@ if [[ ! "$total" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   exit 1
 fi
 
-# Statement counts, recomputed from the same profile (mode line skipped;
-# field 2 is the statement count, field 3 the execution count). The
-# profile already passed `go tool cover` above, so a counts failure here
-# is a gate failure, not a new trust assumption.
-counts="$(awk 'NR > 1 { s += $2; if ($3 > 0) c += $2 } END { print c + 0, s + 0 }' "$profile")"
-covered_statements="${counts%% *}"
-total_statements="${counts##* }"
-if [[ ! "$covered_statements" =~ ^[0-9]+$ ]] || [[ ! "$total_statements" =~ ^[0-9]+$ ]] || [[ "$total_statements" -eq 0 ]]; then
+# Parse profile counters as arbitrary-precision integers and compare to the
+# exact decimal threshold using integer cross-multiplication. Floating point
+# rounding (including awk's doubles) must never affect the gate verdict.
+if ! counts="$(python3 - "$profile" "$threshold" "$total" <<'PYCODE'
+import sys
+
+path, threshold, displayed = sys.argv[1:]
+whole, _, fraction = threshold.partition('.')
+scale = 10 ** len(fraction)
+threshold_scaled = int(whole) * scale + (int(fraction) if fraction else 0)
+covered = total = 0
+try:
+    with open(path, encoding='utf-8') as profile:
+        mode = next(profile).strip()
+        if mode not in ('mode: set', 'mode: count', 'mode: atomic'):
+            raise ValueError('invalid profile mode')
+        for number, line in enumerate(profile, 2):
+            fields = line.split()
+            if len(fields) != 3 or not fields[1].isdigit() or not fields[2].isdigit():
+                raise ValueError(f'invalid counters on line {number}')
+            statements, executions = int(fields[1]), int(fields[2])
+            total += statements
+            if executions > 0:
+                covered += statements
+    if total <= 0:
+        raise ValueError('empty coverage denominator')
+except (OSError, UnicodeError, ValueError, StopIteration) as err:
+    print(f'coverage gate: invalid profile: {err}', file=sys.stderr)
+    sys.exit(1)
+# go tool cover reports one decimal and ignores profile blocks outside
+# functions. Detect inconsistent totals rather than allowing such blocks to
+# inflate the gate. This rounded cross-check is not a complete authenticity
+# proof for small differences within the display's rounding interval.
+dwhole, _, dfrac = displayed.partition('.')
+dscale = 10 ** len(dfrac)
+display_scaled = int(dwhole) * dscale + (int(dfrac) if dfrac else 0)
+if abs(covered * 100 * dscale - total * display_scaled) * 20 > total * dscale:
+    print('coverage gate: profile statement counts disagree with go tool cover total', file=sys.stderr)
+    sys.exit(1)
+passed = covered * 100 * scale >= total * threshold_scaled
+print(covered, total, int(passed))
+PYCODE
+)"; then
   echo "::error::coverage gate: could not recompute statement counts from $profile" >&2
   exit 1
 fi
+read -r covered_statements total_statements passes <<< "$counts"
 
 echo "coverage gate report:"
 echo "commit: ${COVERAGE_GATE_COMMIT:-unknown}"
 echo "go version: ${COVERAGE_GATE_GO_VERSION:-unknown}"
 echo "covered statements: ${covered_statements}"
 echo "total statements: ${total_statements}"
-echo "coverage: ${total}%"
+echo "coverage: ${total}% (go tool cover rounded display)"
+awk -v c="$covered_statements" -v n="$total_statements" 'BEGIN { printf "coverage from counts: %.8f%%\n", 100 * c / n }'
 echo "threshold: ${threshold}%"
 
-if awk -v t="$total" -v th="$threshold" 'BEGIN { exit !(t + 0 >= th + 0) }'; then
+# The exact integer verdict above is independent of the rounded display.
+if [[ "$passes" == 1 ]]; then
   echo "coverage gate: PASS total=${total}% (threshold >= ${threshold}%) profile=$profile"
   exit 0
 fi
 
-echo "::error::coverage gate: FAIL total=${total}% is below the ${threshold}% threshold profile=$profile" >&2
+echo "::error::coverage gate: FAIL covered=${covered_statements}/${total_statements} is below the ${threshold}% threshold (rounded display ${total}%) profile=$profile" >&2
 exit 1

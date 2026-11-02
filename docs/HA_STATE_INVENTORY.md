@@ -174,3 +174,13 @@ everything else runs in the ordinary unit suite.
   Redis behaviour was proven. The harness has since gained an S9
   breaker-sync scenario and a same-host rejection in its
   authorization gate; neither was executed in the container run.
+
+### Video queue file durability boundary
+
+The video queue FileStore remains a **single-instance** store; it does not lock
+or coordinate separate instances or processes. A short write or a failure
+before rename leaves the previous file intact. A directory open, sync, or
+close error after rename returns `ErrFileStoreCommitUncertain`; the instance
+rejects reads and writes until closed. Reopen and reconcile the job and its
+idempotency key before retrying. Reopening reads the currently visible file;
+it does not prove durability across power loss or network filesystem failures.
