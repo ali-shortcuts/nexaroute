@@ -74,7 +74,7 @@ precision), #813 (new ReplicaSet hash after upgrade/rollback), #817 (unbound
 termination wait), #818 (preserve pod termination status) — are merged but have
 **never run against a live cluster**. #650 stays open until they do.
 
-## 3. What each dispatch produces
+## 3. Supplemental dispatches and their evidence limits
 
 The operator must inspect each sanitized acceptance artifact. The status script
 reads GitHub check runs and Actions run metadata; for `--rc` soak it also
@@ -84,23 +84,23 @@ file against the artifact: the operator must independently verify provenance.
 | Workflow | Inputs | Artifact must contain |
 |---|---|---|
 | `conformance-live-canary.yml` | `preset`, `model`, optional `base_url`/`auth_mode` | per-case PASS/FAIL/BLOCKED, provider/API version, date; no prompts or responses |
-| `oidc-runner-acceptance.yml` | none | discovery pinning, state/nonce/PKCE, JWKS + rotation, role mapping, denied unmapped user, logout, audit excerpts |
-| `vault-runner-acceptance.yml` | none | KV put/get round-trip, startup decrypt, wrong/revoked token fail-closed, rotation, outage; and Transit encrypt/decrypt/rewrap, invalid ciphertext, revoked key version, no local fallback |
+| `oidc-runner-acceptance.yml` | none | Disposable runner-local Keycloak only; **not** the organizational tenant required by #647. |
+| `vault-runner-acceptance.yml` | none | Single-node runner-loopback Vault only; **not** staging/HA acceptance for #648 or #649. |
 | `k8s-live-acceptance.yml` | `prev_tag=v0.24.0`, `with_postgres` | a `RESULT:` line with zero failures and zero `NOT_RUN` checks; upgrade, rollback, PVC persistence |
-| `ha-runner-acceptance.yml` | none | nine scenarios; two hosts; measured failover RPO/RTO |
+| `ha-runner-acceptance.yml` | none | Isolated containers on **one host**; not independent-host HA or multi-replica Redis failover required by #652. |
 | `independent-environment.yml` | `full_soak` | a second, independent run of the standard gates |
 | `soak.yml` | `rounds=3`, `duration=2h`, `timeout_minutes=180` | `summary.json` naming the commit, `sustained_seconds>=7200`, every planned stage, a NOT_RUN block |
 
 `nexaroute comfyui-accept` (#651) is an operator CLI, not a workflow: it runs
 from a host that can reach an authorized ComfyUI server.
 
-## 4. The exact commands
+## 4. Supplemental dispatch commands and operator runbook
 
 Once the App has `actions:write` (or from a machine where `gh` is
 `workflow`-scoped, or from the Actions tab → *Run workflow*):
 
 ```sh
-MAIN=$(gh api repos/ali-shortcuts/nexaroute/commits/main --jq .sha)
+CANDIDATE_SHA=$(gh api repos/ali-shortcuts/nexaroute/commits/main --jq .sha)
 
 gh workflow run k8s-live-acceptance.yml --ref main -f prev_tag=v0.24.0
 gh workflow run vault-runner-acceptance.yml --ref main
@@ -109,8 +109,8 @@ gh workflow run ha-runner-acceptance.yml --ref main
 gh workflow run soak.yml --ref main -f rounds=3 -f duration=2h -f timeout_minutes=180
 gh workflow run independent-environment.yml --ref main
 
-# The three that need real credentials, only after the operator authorizes them:
-gh workflow run conformance-live-canary.yml --ref main -f preset=openai -f model=<model>
+# No live provider dispatch here: the operator must first explicitly authorize
+# the provider, model and monetary/token/request ceilings described below.
 ```
 
 **Candidate binding:** the commands above use the mutable name `main` because
@@ -118,8 +118,37 @@ workflow dispatch requires a ref. First complete separately reviewed manifest
 preparation, freeze changes to main, and record `CANDIDATE_SHA`. Verify each
 run's `head_sha` equals that SHA, and re-check main before and after the runs;
 a changed main or mismatched SHA invalidates the run for this candidate. Do
-not reuse a PR merge checkout or an earlier main result. `MAIN` in the example
+not reuse a PR merge checkout or an earlier main result. `CANDIDATE_SHA` in the example
 is an observation, not proof that a later dispatch used it.
+
+These dispatches are supplemental, not a complete external-acceptance
+procedure. For #647, the IdP operator must configure an authorized
+organizational tenant, registered callback and mapped/unmapped accounts, then
+exercise the issue's PKCE, JWKS rotation, roles, logout, clock-skew and audit
+criteria against that tenant. The runner-local workflow cannot do this.
+
+For #648/#649, the Vault operator must provision an authorized staging Vault,
+least-privilege KV and Transit policies and separate test keys, inject secrets
+through the approved secret channel, run the documented live harness, and
+coordinate rotation, revocation, outage, rewrap and rollback. See
+[Vault KV acceptance](reports/verification-slices/vault-kv-acceptance.md)
+and [external verification](EXTERNAL_VERIFICATION.md). Never upload tokens,
+key bytes or unredacted configuration. The runner-loopback workflow does not
+satisfy staging or HA requirements.
+
+For #651, provision an authorized real ComfyUI model and workflow, run the
+[real-inference procedure](reports/verification-slices/comfyui-real-inference-acceptance.md),
+verify playable output, hash and gateway retrieval, and exercise failure and
+cleanup cases. For #652, the infrastructure operator must provision two
+independent hosts, shared PostgreSQL and Redis, a load-balancing endpoint and
+recoverable backup, then coordinate cold-start, replica loss, both backend
+outages and restore while recording topology, RPO and RTO. The single-host
+runner does not satisfy this. For #650 inspect every live kind log and do not
+claim production topology from it. For #653 inspect the exact-SHA soak summary
+**and samples**, all stages and stress rounds; a successful smoke is not a
+2-hour soak. Each operator must retain a sanitized, provenance-bound report for
+independent review. External CLI reports need an authorized workflow/artifact
+retention path for the strict gate; no such path is asserted here.
 
 **Provider budget and stop conditions:** before any canary, the account owner
 must specify in writing the provider, endpoint, models, maximum requests,

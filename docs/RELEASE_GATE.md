@@ -145,7 +145,7 @@ reviewable and machine-checkable; it does not make it silent. Every exclusion
 is printed as a `::warning::` at release time.
 
 See `docs/RELEASE_BLOCKERS.md` for the current per-issue blockers and the
-exact dispatch command that clears each one.
+operator handoff and evidence limits; no single dispatch clears every criterion.
 
 ## Gaps this gate does not hide
 
