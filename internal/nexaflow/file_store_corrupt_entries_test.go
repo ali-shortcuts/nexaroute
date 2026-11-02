@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -11,9 +12,9 @@ import (
 // an empty/partial store or cause a panic on the next mutation.
 func TestFileStoreRejectsNullRecordsWithoutModifyingFile(t *testing.T) {
 	for _, tc := range []struct{ name, document string }{
-		{"run", `{"runs":{"r":null}}`},
-		{"node", `{"nodes":{"r":[null]}}`},
-		{"approval", `{"approvals":{"r\u0000n":null}}`},
+		{"run", `{"drafts":{},"revisions":{},"runs":{"r":null},"run_by_idem":{},"nodes":{},"approvals":{}}`},
+		{"node", `{"drafts":{},"revisions":{},"runs":{},"run_by_idem":{},"nodes":{"r":[null]},"approvals":{}}`},
+		{"approval", `{"drafts":{},"revisions":{},"runs":{},"run_by_idem":{},"nodes":{},"approvals":{"r\u0000n":null}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "store.json")
@@ -25,6 +26,9 @@ func TestFileStoreRejectsNullRecordsWithoutModifyingFile(t *testing.T) {
 			if err == nil {
 				s.Close()
 				t.Fatal("corrupt record accepted")
+			}
+			if !strings.Contains(err.Error(), "null "+tc.name) {
+				t.Fatalf("wrong corruption error: %v", err)
 			}
 			got, err := os.ReadFile(path)
 			if err != nil || !bytes.Equal(got, original) {

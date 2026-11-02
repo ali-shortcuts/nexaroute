@@ -39,7 +39,11 @@ the underlying filesystem error, reopen, inspect the recovered state, and
 reconcile the operation before deciding whether to retry. Reopening does not
 prove the rename would survive a later crash after a failed directory sync.
 Empty or JSON-null existing store files are corrupt and require operator
-recovery; they are not treated as new stores. Closing is idempotent and all
+recovery; they are not treated as new stores. Partially missing or null
+snapshot sections also fail closed. For compatibility the legacy empty JSON
+object `{}` remains accepted, so it is indistinguishable from a document whose
+data was entirely replaced with `{}`; operators should retain and verify
+backups. Closing is idempotent and all
 operations on a closed instance fail. Interprocess file locking is implemented
 only on Linux and Darwin; other platforms must not use concurrent file writers.
 
