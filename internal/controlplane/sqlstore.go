@@ -70,13 +70,23 @@ func (s *SQLStore) Put(ctx context.Context, namespace string, expectedRevision u
 		return Snapshot{}, ErrConflict
 	}
 	next := Snapshot{Revision: current + 1, Schema: schema, Payload: append([]byte(nil), payload...), UpdatedAt: time.Now().UTC()}
+	var res sql.Result
 	if current == 0 {
-		_, err = tx.ExecContext(ctx, `INSERT INTO `+snapshotTable+` (namespace, revision, schema_version, payload, updated_at) VALUES ($1,$2,$3,$4,$5)`, namespace, next.Revision, next.Schema, next.Payload, next.UpdatedAt)
+		res, err = tx.ExecContext(ctx, `INSERT INTO `+snapshotTable+` (namespace, revision, schema_version, payload, updated_at) VALUES ($1,$2,$3,$4,$5)`, namespace, next.Revision, next.Schema, next.Payload, next.UpdatedAt)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE `+snapshotTable+` SET revision=$2, schema_version=$3, payload=$4, updated_at=$5 WHERE namespace=$1 AND revision=$6`, namespace, next.Revision, next.Schema, next.Payload, next.UpdatedAt, expectedRevision)
+		res, err = tx.ExecContext(ctx, `UPDATE `+snapshotTable+` SET revision=$2, schema_version=$3, payload=$4, updated_at=$5 WHERE namespace=$1 AND revision=$6`, namespace, next.Revision, next.Schema, next.Payload, next.UpdatedAt, expectedRevision)
 	}
 	if err != nil {
 		return Snapshot{}, wrapStoreError("write control snapshot", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return Snapshot{}, wrapStoreError("control write result", err)
+	} else if n == 0 {
+		// A concurrent Delete removed the row (or changed its revision)
+		// after this transaction read it. The advisory lock serializes
+		// writers, so this should not happen; fail closed instead of
+		// reporting a success that never reached the database.
+		return Snapshot{}, ErrConflict
 	}
 	if err = tx.Commit(); err != nil {
 		return Snapshot{}, wrapStoreError("commit control snapshot", err)
@@ -86,7 +96,23 @@ func (s *SQLStore) Put(ctx context.Context, namespace string, expectedRevision u
 }
 
 func (s *SQLStore) Delete(ctx context.Context, namespace string, expectedRevision uint64) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM `+snapshotTable+` WHERE namespace=$1 AND revision=$2`, namespace, expectedRevision)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return wrapStoreError("begin control write", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	// Take the same namespace advisory lock as Put so a Delete cannot land
+	// in the middle of a Put and make that Put's UPDATE match zero rows
+	// while Put still reports success. Writers now serialize per namespace.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, namespace); err != nil {
+		return wrapStoreError("lock control namespace", err)
+	}
+	result, err := tx.ExecContext(ctx, `DELETE FROM `+snapshotTable+` WHERE namespace=$1 AND revision=$2`, namespace, expectedRevision)
 	if err != nil {
 		return wrapStoreError("delete control snapshot", err)
 	}
@@ -98,10 +124,8 @@ func (s *SQLStore) Delete(ctx context.Context, namespace string, expectedRevisio
 		// No row matched namespace+revision: distinguish a missing
 		// namespace (ErrNotFound, like every other backend) from a
 		// revision mismatch on an existing namespace (ErrConflict).
-		// Mapping both to ErrConflict made "delete something that
-		// was never created" look like a write conflict.
 		var probe int64
-		qerr := s.db.QueryRowContext(ctx, `SELECT revision FROM `+snapshotTable+` WHERE namespace=$1`, namespace).Scan(&probe)
+		qerr := tx.QueryRowContext(ctx, `SELECT revision FROM `+snapshotTable+` WHERE namespace=$1`, namespace).Scan(&probe)
 		if errors.Is(qerr, sql.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -110,6 +134,10 @@ func (s *SQLStore) Delete(ctx context.Context, namespace string, expectedRevisio
 		}
 		return ErrConflict
 	}
+	if err = tx.Commit(); err != nil {
+		return wrapStoreError("commit control snapshot", err)
+	}
+	committed = true
 	return nil
 }
 
