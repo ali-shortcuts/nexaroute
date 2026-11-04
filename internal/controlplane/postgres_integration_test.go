@@ -203,8 +203,9 @@ func TestPostgresIntegrationConcurrentFirstWriteRace(t *testing.T) {
 // Regression for audit #830 / issue #834: a concurrent Delete must not
 // let Put report success when its UPDATE matches zero rows. Put and Delete
 // now take the same namespace advisory lock, so writers serialize; exactly
-// one writer succeeds and the rest report ErrConflict. Put never reports
-// false success against a namespace a Delete removed.
+// one writer succeeds and the rest report a deterministic error. Put never
+// reports false success against a namespace a Delete removed, and a deleter
+// racing after the row is gone correctly reports ErrNotFound.
 func TestPostgresIntegrationPutDeleteRace(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLStore(integrationDB(t))
@@ -246,7 +247,7 @@ func TestPostgresIntegrationPutDeleteRace(t *testing.T) {
 		switch {
 		case err == nil:
 			deleteSuccesses++
-		case errors.Is(err, ErrConflict):
+		case errors.Is(err, ErrConflict), errors.Is(err, ErrNotFound):
 		default:
 			t.Fatalf("deleter %d: unexpected error %v", i, err)
 		}
