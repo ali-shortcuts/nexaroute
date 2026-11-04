@@ -406,6 +406,14 @@ func (s *Server) openAIChat(w http.ResponseWriter, r *http.Request) {
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventModelCooldown, c.Deployment.ID, lastErr, events.Event{ErrorType: policy.ErrorType, StatusCode: resp.StatusCode})
 			}
 			if (policy.Failover || cls.CapabilityFailure) && attempts < max && i+1 < len(candidates) {
+				// 429, 408, and 5xx leave provider-side execution unknown: a
+				// pre-commit replay may duplicate provider-side work, so record
+				// ambiguous_outcome before failing over
+				// (docs/RETRY_SAFETY.md). Proven pre-execution rejections
+				// (401/403/404) and capability failures are not ambiguous.
+				if executionUnknownStatus(resp.StatusCode) {
+					s.emitAmbiguousOutcome(r.Header.Get("x-request-id"), c.Deployment.ID, fmt.Errorf("%s", lastErr), headerLatency)
+				}
 				s.autopilotRecordFailover(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 				s.bus.Add(events.Event{RequestID: r.Header.Get("x-request-id"), Kind: "failover", Deployment: c.Deployment.ID, Message: fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), StatusCode: resp.StatusCode, FailoverClass: policy.ErrorType})
 				s.emitProductionEvent(r.Header.Get("x-request-id"), ProductionEventRequestFailover, c.Deployment.ID, fmt.Sprintf("HTTP %d; trying next eligible candidate", resp.StatusCode), events.Event{StatusCode: resp.StatusCode})
