@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ali-shortcuts/nexaroute/internal/config"
 )
@@ -309,5 +310,48 @@ func TestMediaSpeechTruncatedUpstreamIsNotSilent200(t *testing.T) {
 	}
 	if rr.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502; body=%s", rr.Code, rr.Body.String())
+	}
+}
+
+// Regression (audit #831 finding 3): when model rewrite (patchJSONModel /
+// rewriteMultipartModel) fails in the candidate loop before any upstream
+// attempt, serveMedia must release the admission budget hold (Wave C-4)
+// instead of leaking the reservation until its TTL expires. The request's
+// model is accepted by mediaRequestModel, but a deployment model that is
+// not valid UTF-8 makes patchJSONModel fail, so no upstream call is made.
+func TestMediaRewriteFailureReleasesBudgetHold(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream must not be reached when model rewrite fails")
+	}))
+	t.Cleanup(up.Close)
+	cfg := config.Default()
+	cfg.Probe.Enabled = false
+	cfg.ClientAuth.Enabled = true
+	cfg.ClientAuth.VirtualKeys = []config.VirtualKeyConfig{
+		{ID: "vk-media", KeyHash: keyDigest("media-key"), BudgetUSD: 5},
+	}
+	p := config.ProviderConfig{
+		ID: "mp", Name: "Media", Type: "openai_compatible", BaseURL: up.URL,
+		APIKey: "k", Enabled: true, MaxConcurrency: 8,
+		Models: []config.ModelConfig{{ID: "m", Model: "bad\xffmodel", Enabled: true, Weight: 1,
+			InputCostPerMTok: 10, OutputCostPerMTok: 30}},
+	}
+	p.ApplyDefaults()
+	cfg.Providers = []config.ProviderConfig{p}
+	s := testGateway(t, cfg)
+	s.SyncCapabilityContracts()
+
+	body := []byte(`{"model":"m","input":"hello"}`)
+	req := httptest.NewRequest(http.MethodPost, "http://gateway/v1/embeddings", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", "media-key")
+	rr := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected gateway-side 400 on rewrite failure, got %d: %s", rr.Code, rr.Body.String())
+	}
+	committed, reserved := s.budgets.Snapshot("vk-media", time.Now())
+	if committed != 0 || reserved != 0 {
+		t.Fatalf("budget hold leaked on rewrite failure: ledger=(%v,%v), want (0,0)", committed, reserved)
 	}
 }
