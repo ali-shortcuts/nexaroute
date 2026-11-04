@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Mandatory browser-acceptance runner for NexaRoute.
 
-Runs the existing browser suites in order -- test-browser-e2e.py,
-test-browser-e2e-502.py and test-live-visual-agent.py -- and reports one
+Runs the browser suites in order -- test-browser-e2e.py,
+test-browser-e2e-502.py, test-live-visual-agent.py, and the isolated
+workflow-config browser regression -- and reports one
 status per suite. This script is a runner, not a parallel framework: it
 adds no scenarios of its own, it only executes the suites that already
 exist and records whether each one really ran.
@@ -78,6 +79,7 @@ SUITES = [
     ("browser-e2e", "scripts/test-browser-e2e.py", "BROWSER E2E PASS"),
     ("browser-e2e-502", "scripts/test-browser-e2e-502.py", "BROWSER E2E #502 PASS"),
     ("live-visual-agent", "scripts/test-live-visual-agent.py", "LIVE VISUAL AGENT E2E PASS"),
+    ("workflow-config-browser", "scripts/test-workflow-config-browser.py", "WORKFLOW CONFIG BROWSER PASS"),
 ]
 
 # Values that must never appear in a diagnostic log. The first pattern

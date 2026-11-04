@@ -35,6 +35,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 func task6PG(t *testing.T) *sql.DB {
@@ -464,14 +467,18 @@ func TestTask6PostgresMigrationFailureRollback(t *testing.T) {
 	if adminDSN == "" {
 		t.Skip("NEXAROUTE_TEST_PG_DSN not set; PostgreSQL live acceptance skipped")
 	}
-	admin, err := sql.Open("pgx", "postgres://root@/postgres?host=/var/run/postgresql")
+	adminConfig, err := pgx.ParseConfig(adminDSN)
+	if err != nil {
+		t.Fatalf("parse disposable admin DSN: %v", err)
+	}
+	admin, err := sql.Open("pgx", adminDSN)
 	if err != nil {
 		t.Fatalf("admin open: %v", err)
 	}
 	defer admin.Close()
 	ctx := context.Background()
 	if err := admin.PingContext(ctx); err != nil {
-		t.Fatalf("admin ping: %v (this test needs socket peer auth as root)", err)
+		t.Fatalf("admin ping: %v (this test needs an authorized disposable superuser)", err)
 	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	testDB := "task6_mig_" + suffix
@@ -490,7 +497,12 @@ func TestTask6PostgresMigrationFailureRollback(t *testing.T) {
 		_, _ = admin.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+role)
 	})
 	// The role can connect but cannot create tables.
-	restrictedDSN := fmt.Sprintf("postgres://%s:%s@127.0.0.1:5432/%s", role, testPass, testDB)
+	restricted := adminConfig.Copy()
+	restricted.User = role
+	restricted.Password = testPass
+	restricted.Database = testDB
+	restrictedDSN := stdlib.RegisterConnConfig(restricted)
+	defer stdlib.UnregisterConnConfig(restrictedDSN)
 	if _, err := OpenPostgresStore(ctx, restrictedDSN); err == nil {
 		t.Fatal("migration as CREATE-less role succeeded, want permission error")
 	} else if !strings.Contains(err.Error(), "permission denied") && !strings.Contains(err.Error(), "denied") {
@@ -500,7 +512,11 @@ func TestTask6PostgresMigrationFailureRollback(t *testing.T) {
 	// count from a root connection opened against the test DB
 	// itself (the restricted role's failed attempt is over: its
 	// pool is closed by OpenPostgresStore on migration error).
-	rootTestDB, err := sql.Open("pgx", "postgres://root@/"+testDB+"?host=/var/run/postgresql")
+	testAdminConfig := adminConfig.Copy()
+	testAdminConfig.Database = testDB
+	testAdminDSN := stdlib.RegisterConnConfig(testAdminConfig)
+	defer stdlib.UnregisterConnConfig(testAdminDSN)
+	rootTestDB, err := sql.Open("pgx", testAdminDSN)
 	if err != nil {
 		t.Fatalf("root testdb open: %v", err)
 	}

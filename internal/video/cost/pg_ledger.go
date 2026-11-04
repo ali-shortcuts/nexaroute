@@ -199,16 +199,26 @@ func (l *PostgresLedger) ReserveForJob(jobID string, e video.CostEstimate, max f
 	return nil
 }
 
-// ReleaseForJob releases a still-reserved reservation. It is a single
-// conditional update; a job in any other state is untouched. The
-// orchestrator contract has no error return here, and a failed release
-// leaves the row visibly reserved (Reserved keeps reporting it) rather
-// than silently dropping accounting.
+// ReleaseForJob preserves the legacy void-return interface. Callers needing
+// reliable error handling should use ReleaseForJobChecked; the legacy method
+// logs errors but cannot propagate them to its caller.
 func (l *PostgresLedger) ReleaseForJob(jobID string) {
+	if err := l.ReleaseForJobChecked(jobID); err != nil {
+		log.Printf("video cost ledger: release failed: %v", err)
+	}
+}
+
+// ReleaseForJobChecked reports database failures. The conditional update may
+// have committed if its acknowledgment was lost; reconcile before retrying.
+func (l *PostgresLedger) ReleaseForJobChecked(jobID string) error {
 	ctx, cancel := l.opContext()
 	defer cancel()
-	_, _ = l.db.ExecContext(ctx, `UPDATE `+videoCostTable+
+	_, err := l.db.ExecContext(ctx, `UPDATE `+videoCostTable+
 		` SET state = 'released', updated_at = now() WHERE job_id = $1 AND state = 'reserved'`, jobID)
+	if err != nil {
+		return fmt.Errorf("video cost ledger: release job %s: %w", jobID, err)
+	}
+	return nil
 }
 
 // settle runs one settlement transition under the job row lock. The

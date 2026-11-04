@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # release-gate-status.sh -- SHA-bound release gate report.
 #
-# Usage: scripts/release-gate-status.sh <sha> [repo] [--rc]
+# Usage: scripts/release-gate-status.sh <sha> [repo] [--rc] [--soak-summary PATH]
 # (--rc may also be given without a repo: <sha> --rc.)
 #
-# Queries the GitHub Checks API for check runs on exactly <sha> and
-# reports one row per gate. A gate with no check run on that SHA is
-# NOT_RUN, never PASS; a gate still queued/running is RUNNING and
-# also fails the gate. Results from any other SHA are never used.
+# Queries GitHub check runs associated with <sha>. PR-mode checks may test a
+# synthetic merge checkout; --rc additionally verifies non-PR Actions run
+# metadata and requires a validated two-hour soak summary for that SHA.
+# The operator must independently verify supplied artifact provenance.
 #
 # PR-required gates are the checks that run on pull_request for this
 # repository (CI, Security, Coverage, Redis/real-system acceptance).
@@ -25,14 +25,15 @@ set -euo pipefail
 sha="${1:-}"
 repo=""
 rc=0
-# Positional parsing that tolerates `--rc` without a repo argument:
-# `script <sha> --rc` must not make `--rc` the repo.
-for arg in "${@:2}"; do
-	if [ "$arg" = "--rc" ]; then
-		rc=1
-	elif [ -z "$repo" ]; then
-		repo="$arg"
-	fi
+soak_summary=""
+shift || true
+while (($#)); do
+  case "$1" in
+    --rc) rc=1; shift ;;
+    --soak-summary) [[ $# -ge 2 ]] || { echo "missing --soak-summary value" >&2; exit 2; }; soak_summary="$2"; shift 2 ;;
+    --*) echo "unknown option: $1" >&2; exit 2 ;;
+    *) if [[ -n "$repo" ]]; then echo "unexpected argument: $1" >&2; exit 2; fi; repo="$1"; shift ;;
+  esac
 done
 repo="${repo:-${GITHUB_REPOSITORY:-ali-shortcuts/nexaroute}}"
 if [ -z "$sha" ]; then
@@ -52,13 +53,19 @@ if ! gh api "repos/$repo/commits/$sha/check-runs?per_page=100" > "$tmp/check-run
 	exit 2
 fi
 
-RELEASE_GATE_SHA="$sha" RELEASE_GATE_RC="$rc" python3 - "$tmp/check-runs.json" <<'PY'
+RELEASE_GATE_SHA="$sha" RELEASE_GATE_RC="$rc" RELEASE_GATE_REPO="$repo" RELEASE_GATE_SOAK_SUMMARY="$soak_summary" RELEASE_GATE_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)" python3 - "$tmp/check-runs.json" <<'PY'
 import json
 import os
 import sys
+import re
+import subprocess
 
 sha = os.environ["RELEASE_GATE_SHA"]
 rc = os.environ["RELEASE_GATE_RC"] == "1"
+repo = os.environ["RELEASE_GATE_REPO"]
+soak_summary = os.environ["RELEASE_GATE_SOAK_SUMMARY"]
+script_dir = os.environ["RELEASE_GATE_SCRIPT_DIR"]
+run_metadata = {}
 with open(sys.argv[1]) as fh:
     payload = json.load(fh)
 
@@ -117,7 +124,53 @@ def row_status(name):
     # Fail closed: only an explicit success conclusion passes. A
     # completed run with any other conclusion, or with a missing
     # conclusion from an incomplete API record, is FAIL.
-    return "PASS" if run.get("conclusion") == "success" else "FAIL"
+    if run.get("conclusion") != "success":
+        return "FAIL"
+    if not rc:
+        return "PASS"
+    # GitHub associates pull_request checks with the PR head even though the
+    # default checkout uses a synthetic merge SHA. Do not count them as exact
+    # release-candidate head evidence. Unknown provenance is also fail-closed.
+    details = run.get("details_url") or ""
+    match = re.fullmatch(r"https://github\.com/" + re.escape(repo) +
+                         r"/actions/runs/(\d+)/job/\d+", details)
+    if not match:
+        return "UNVERIFIED"
+    run_id = match.group(1)
+    if run_id not in run_metadata:
+        try:
+            raw = subprocess.check_output(["gh", "api", f"repos/{repo}/actions/runs/{run_id}"],
+                                          stderr=subprocess.DEVNULL, text=True)
+            run_metadata[run_id] = json.loads(raw)
+        except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+            run_metadata[run_id] = None
+    meta = run_metadata[run_id]
+    if not isinstance(meta, dict) or meta.get("event") not in ("push", "workflow_dispatch") \
+            or meta.get("head_sha") != sha or meta.get("status") != "completed" \
+            or meta.get("conclusion") != "success":
+        return "UNVERIFIED"
+    if name == "soak":
+        # A passing soak job may have run for zero seconds. Require a complete
+        # locally supplied report for this SHA with >=2h sustained workload.
+        # The operator must separately verify artifact provenance against run_id.
+        if meta.get("event") != "workflow_dispatch" or not soak_summary:
+            return "UNVERIFIED"
+        try:
+            with open(soak_summary, encoding="utf-8") as fh:
+                report = json.load(fh)
+            seconds = report.get("requested_duration_seconds")
+            if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds < 7200 \
+                    or report.get("result") != "PASS" or report.get("exit_code") != 0:
+                return "UNVERIFIED"
+            result = subprocess.run([sys.executable, os.path.join(script_dir, "check-soak-evidence.py"),
+                                     "--summary", soak_summary, "--kind", "soak", "--expected-commit", sha,
+                                     "--expected-duration-seconds", str(seconds)],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            if result.returncode != 0:
+                return "UNVERIFIED"
+        except (OSError, ValueError, AttributeError):
+            return "UNVERIFIED"
+    return "PASS"
 
 pr_gates = [
     ("verify", "CI: verify.sh + stress + browser + container"),
@@ -141,6 +194,8 @@ rc_gates = [
 ]
 
 print(f"Release gate status for SHA {sha}")
+if rc:
+    print("RC: exact non-PR workflow provenance required; verify supplied soak artifact provenance independently.")
 print(f"{'GATE':<52} {'STATUS':<8} SOURCE")
 failures = []
 for name, source in pr_gates:

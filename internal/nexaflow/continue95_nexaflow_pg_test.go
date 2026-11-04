@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -287,9 +288,13 @@ func TestContinue95NexaflowPGCorruptNegativeRevision(t *testing.T) {
 		t.Fatalf("sql.Open: %v", err)
 	}
 	defer db.Close()
+	raw, err := json.Marshal(def)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.ExecContext(ctx,
 		`INSERT INTO nexaroute_workflow_revisions (definition_id, revision, content_hash, definition, status, published_by) VALUES ($1, -1, 'x', $2, 'published', 'tester')`,
-		def.ID, mustJSON(def)); err != nil {
+		def.ID, raw); err != nil {
 		t.Fatalf("insert negative revision: %v", err)
 	}
 	if _, err := store.Publish(ctx, def.ID, "tester"); err == nil || !strings.Contains(err.Error(), "corrupt negative revision") {
@@ -838,37 +843,31 @@ func TestContinue95NexaflowPGCorruptRows(t *testing.T) {
 	}
 }
 
-func TestContinue95NexaflowPGMustJSONFallback(t *testing.T) {
+func TestContinue95NexaflowPGRejectsInvalidJSONWithoutDataLoss(t *testing.T) {
 	ctx := context.Background()
 	store := Continue95NexaflowPGStore(t)
-	// A func-valued config cannot marshal: the whole draft falls back
-	// to "{}", so the save succeeds and the draft reads back empty.
 	defID := Continue95NexaflowPGID("funcdef")
-	def := Continue95NexaflowPGDef(defID)
-	def.Nodes[1].Config = map[string]any{"f": func() {}}
-	if err := store.SaveDraft(ctx, def); err != nil {
-		t.Fatalf("SaveDraft func config: %v", err)
+	valid := Continue95NexaflowPGDef(defID)
+	if err := store.SaveDraft(ctx, valid); err != nil {
+		t.Fatalf("save original: %v", err)
+	}
+	bad := Continue95NexaflowPGDef(defID)
+	bad.Nodes[1].Config = map[string]any{"f": func() {}}
+	if err := store.SaveDraft(ctx, bad); err == nil {
+		t.Fatal("unencodable draft accepted")
 	}
 	got, err := store.GetDraft(ctx, defID)
-	if err != nil {
-		t.Fatalf("GetDraft func config: %v", err)
+	if err != nil || got.ID != defID {
+		t.Fatalf("original draft lost: got=%+v err=%v", got, err)
 	}
-	if got.ID != "" {
-		t.Fatalf("GetDraft func config ID = %q, want empty (fallback {})", got.ID)
-	}
-	// Same fallback for a func-valued run input.
 	runID := Continue95NexaflowPGID("funcrun")
 	run := Continue95NexaflowPGRun(runID, defID, 1, "")
 	run.Input = map[string]any{"f": func() {}}
-	if err := store.CreateRun(ctx, run); err != nil {
-		t.Fatalf("CreateRun func input: %v", err)
+	if err := store.CreateRun(ctx, run); err == nil {
+		t.Fatal("unencodable run accepted")
 	}
-	gotRun, err := store.GetRun(ctx, runID)
-	if err != nil {
-		t.Fatalf("GetRun func input: %v", err)
-	}
-	if len(gotRun.Input) != 0 {
-		t.Fatalf("GetRun func input = %v, want empty (fallback {})", gotRun.Input)
+	if _, err := store.GetRun(ctx, runID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid run persisted: %v", err)
 	}
 }
 

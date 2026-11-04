@@ -39,6 +39,10 @@ var (
 	// ErrRunInFlight is returned when Execute is called for a run that
 	// another Execute call is already driving.
 	ErrRunInFlight = errors.New("nexaflow: run already being executed")
+	// ErrRunInitializationIncomplete prevents replay or dispatch of a run
+	// whose initial node records were only partly persisted. Reconcile it
+	// manually; blind append retries can create duplicate attempts.
+	ErrRunInitializationIncomplete = errors.New("nexaflow: run initialization incomplete; reconciliation required")
 	// ErrNotWaiting is returned by DecideApproval when the node is not
 	// currently waiting for a decision.
 	ErrNotWaiting = errors.New("nexaflow: node is not waiting for approval")
@@ -175,6 +179,51 @@ func (e *Engine) semaphore(definitionID string, maxConcurrent int) chan struct{}
 	return sem
 }
 
+// requireInitializedRun fails closed if creating the run and its initial
+// attempts was interrupted. It does not guess which appends committed.
+func (e *Engine) requireInitializedRun(ctx context.Context, run Run) error {
+	nodes, err := e.store.GetNodeExecutions(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	present := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		if node.Attempt == 0 {
+			present[node.NodeID] = true
+		}
+	}
+	for _, node := range run.Definition.Nodes {
+		if !present[node.ID] {
+			return fmt.Errorf("%w: run %s missing node %s", ErrRunInitializationIncomplete, run.ID, node.ID)
+		}
+	}
+	return nil
+}
+
+// A concurrent creator can expose its run before its node inserts finish.
+// Briefly wait for that creator rather than returning a transient conflict.
+// This never appends or repairs anything and remains bounded if the creator
+// died; Execute continues to fail immediately on incomplete state.
+func (e *Engine) waitForInitializedRun(ctx context.Context, run Run) error {
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		err := e.requireInitializedRun(ctx, run)
+		if !errors.Is(err, ErrRunInitializationIncomplete) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return err
+		case <-ticker.C:
+		}
+	}
+}
+
 // CreateRun validates a published definition snapshot, checks engine
 // bounds, and durably creates a run pinned to that snapshot plus its
 // initial pending node attempts. It never executes anything: Execute
@@ -214,6 +263,9 @@ func (e *Engine) CreateRun(ctx context.Context, pub PublishedDefinition, princip
 			if !sameJSONValue(existing.Input, input) {
 				return Run{}, ErrIdempotencyConflict
 			}
+			if err := e.waitForInitializedRun(ctx, existing); err != nil {
+				return Run{}, err
+			}
 			return existing, nil
 		} else if !errors.Is(err, ErrNotFound) {
 			return Run{}, err
@@ -243,6 +295,9 @@ func (e *Engine) CreateRun(ctx context.Context, pub PublishedDefinition, princip
 			if existing, ferr := e.store.GetRunByIdempotency(ctx, idempotencyKey); ferr == nil &&
 				existing.DefinitionID == pub.Version.DefinitionID && existing.Revision == pub.Version.Revision &&
 				sameJSONValue(existing.Input, input) {
+				if err := e.waitForInitializedRun(ctx, existing); err != nil {
+					return Run{}, err
+				}
 				return e.store.GetRun(ctx, existing.ID)
 			}
 		}
@@ -250,7 +305,7 @@ func (e *Engine) CreateRun(ctx context.Context, pub PublishedDefinition, princip
 	}
 	for _, nodeID := range TopologicalOrder(def) {
 		if _, err := e.store.AppendNodeExecution(ctx, NodeExecution{
-			RunID: run.ID, NodeID: nodeID, State: NodePending,
+			RunID: run.ID, NodeID: nodeID, State: NodePending, AppendOperationID: "initial",
 		}); err != nil {
 			return Run{}, err
 		}
@@ -273,6 +328,9 @@ func (e *Engine) Execute(ctx context.Context, runID string) (Run, error) {
 	}
 	if run.State == RunNeedsManualAction {
 		return run, ErrRunParked
+	}
+	if err := e.requireInitializedRun(ctx, run); err != nil {
+		return run, err
 	}
 
 	e.mu.Lock()
@@ -877,7 +935,7 @@ func (e *Engine) recordOutcome(ctx context.Context, run Run, jb engineJob, out m
 			}
 		}
 		appended, aerr := e.store.AppendNodeExecution(ctx, NodeExecution{
-			RunID: run.ID, NodeID: jb.node.ID, State: NodePending,
+			RunID: run.ID, NodeID: jb.node.ID, State: NodePending, AppendOperationID: fmt.Sprintf("retry:%d", exec.Attempt),
 		})
 		if aerr != nil {
 			e.parkPersistFailure(ctx, run, exec)

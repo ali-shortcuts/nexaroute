@@ -400,7 +400,10 @@ func (s *Server) adminAutopilotAction(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Action string `json:"action"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	// The body carries exactly one short field, so it is bounded like every
+	// other admin mutation (drain.go, video_force_fail.go): 4 KiB. Without the
+	// bound a client could stream an arbitrarily large body into the decoder.
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
 		errorJSON(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}

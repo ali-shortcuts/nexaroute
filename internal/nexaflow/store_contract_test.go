@@ -54,6 +54,39 @@ func runStoreContract(t *testing.T, store Store, pg bool) {
 		t.Fatalf("GetDraft missing: want ErrNotFound, got %v", err)
 	}
 
+	// Conditional publication must compare under the same lock/transaction as
+	// revision creation. A stale hash and an empty expected hash fail closed.
+	conditional, ok := store.(ConditionalPublisher)
+	if !ok {
+		t.Fatal("store does not implement ConditionalPublisher")
+	}
+	hash, err := ContentHash(&got2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stale := range []string{"", "incorrect-hash"} {
+		if _, err := conditional.PublishIfUnchanged(ctx, def.ID, "tester", stale); !errors.Is(err, ErrStateConflict) {
+			t.Fatalf("PublishIfUnchanged(%q): got %v, want conflict", stale, err)
+		}
+	}
+	changed := def
+	changed.Name = "updated by another writer"
+	if err := store.SaveDraft(ctx, changed); err != nil {
+		t.Fatalf("save changed draft: %v", err)
+	}
+	if _, err := conditional.PublishIfUnchanged(ctx, def.ID, "tester", hash); !errors.Is(err, ErrStateConflict) {
+		t.Fatalf("changed draft publish: got %v, want conflict", err)
+	}
+	if err := store.SaveDraft(ctx, def); err != nil {
+		t.Fatalf("restore draft: %v", err)
+	}
+	if revisions, err := store.ListRevisions(ctx, def.ID); err != nil || len(revisions) != 0 {
+		t.Fatalf("stale publish created revisions: %+v, %v", revisions, err)
+	}
+	if _, err := conditional.PublishIfUnchanged(ctx, def.ID, "tester", hash); err != nil {
+		t.Fatalf("PublishIfUnchanged matching draft: %v", err)
+	}
+
 	// Publish: idempotent, then supersede on new content.
 	rev1, err := store.Publish(ctx, "wf-contract", "tester")
 	if err != nil {

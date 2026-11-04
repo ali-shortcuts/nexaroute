@@ -3,6 +3,7 @@
 package nexaflow
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -30,6 +31,7 @@ func releaseFileLock(f *os.File) error {
 	if f == nil {
 		return nil
 	}
-	_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-	return f.Close()
+	unlockErr := syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	closeErr := f.Close()
+	return errors.Join(unlockErr, closeErr)
 }

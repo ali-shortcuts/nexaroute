@@ -276,6 +276,26 @@ jobs:
           NEXAROUTE_TEST_POSTGRES_DSN: "postgres://nexaroute:nexaroute-ci-only@127.0.0.1:5432/nexaroute_test?sslmode=disable"
         run: go test -tags integration ./internal/sharedstate/ -run 'TestPostgresBreakerStoreIntegration' -count=1 -v
 
+      - name: PostgreSQL network commit-acknowledgment fault test
+        env:
+          NEXAROUTE_TEST_PG_DSN: "postgres://nexaroute:nexaroute-ci-only@127.0.0.1:5432/nexaroute_test?sslmode=disable"
+        run: |
+          set -o pipefail
+          set +e
+          go test ./internal/nexaflow/ -run '^(TestPostgresNetworkDropsCommitAcknowledgement|TestAppendIdempotencyPostgres|TestPostgresIncompleteRunReplayAndExecuteFailClosed|TestPostgresFinalInitializationLostReplyReplay|TestPostgresConcurrentFirstApproval|TestPostgresConcurrentConflictingFirstApprovals|TestPostgresPruneConcurrentTerminalTransition)$' -count=1 -v 2>&1 | tee "$RUNNER_TEMP/pg-network-fault.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          failed=0
+          for test_name in TestPostgresNetworkDropsCommitAcknowledgement TestAppendIdempotencyPostgres TestPostgresIncompleteRunReplayAndExecuteFailClosed TestPostgresFinalInitializationLostReplyReplay TestPostgresConcurrentFirstApproval TestPostgresConcurrentConflictingFirstApprovals TestPostgresPruneConcurrentTerminalTransition; do
+            if grep -q "^--- PASS: ${test_name} " "$RUNNER_TEMP/pg-network-fault.log"; then
+              echo "PostgreSQL ${test_name}: **RAN AND PASSED**" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "PostgreSQL ${test_name}: **FAILED OR SKIPPED**" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+          done
+          if [ "$status" -ne 0 ] || [ "$failed" -ne 0 ]; then exit 1; fi
+
       - name: PostgreSQL video job-store integration tests
         env:
           NEXAROUTE_TEST_POSTGRES_DSN: "postgres://nexaroute:nexaroute-ci-only@127.0.0.1:5432/nexaroute_test?sslmode=disable"

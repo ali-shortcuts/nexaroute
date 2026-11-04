@@ -72,6 +72,19 @@ check "$tmp/at" "coverage.out" "95.0" 0 "exactly 95.0% passes (inclusive thresho
 make_fixture "$tmp/below" 1000 949
 check "$tmp/below" "coverage.out" "95.0" 1 "94.9% fails below threshold"
 
+# go tool cover displays only one decimal: 1899/2000 is 94.95%, but
+# may be displayed as 95.0%. The gate must compare unrounded counts.
+make_fixture "$tmp/rounding" 2000 1899
+check "$tmp/rounding" "coverage.out" "95.0" 1 "94.95% fails despite rounded display"
+
+make_fixture "$tmp/near" 10000 9499
+check "$tmp/near" "coverage.out" "95.0" 1 "94.99% fails despite rounded display"
+check "$tmp/at" "coverage.out" "95.000000000000000000000000000001" 1 "exact threshold arithmetic rejects a minimally higher threshold"
+
+cp -R "$tmp/below" "$tmp/outside"
+printf 'gatefixture/f.go:99999.2,99999.8 10000 1\n' >> "$tmp/outside/coverage.out"
+check "$tmp/outside" "coverage.out" "95.0" 1 "profile blocks outside functions cannot inflate the verdict"
+
 make_fixture "$tmp/above" 20 20
 check "$tmp/above" "coverage.out" "95.0" 0 "100% passes above threshold"
 
