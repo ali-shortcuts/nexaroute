@@ -509,3 +509,72 @@ func TestRetrySafetyHTTPStatusAuthFailoverNotAmbiguous(t *testing.T) {
 		t.Fatal("HTTP 401 failover must not record ambiguous_outcome: execution is proven pre-execution")
 	}
 }
+
+// OpenAI parallel: a 429 failover must record ambiguous_outcome.
+func TestRetrySafetyOpenAIHTTPStatusFailoverRecordsAmbiguousOutcome(t *testing.T) {
+	var primaryHits, secondaryHits atomic.Int64
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":{"message":"rate limit","type":"rate_limit_error"}}`)
+	}))
+	defer primary.Close()
+	secondary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondaryHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, failureOKBody)
+	}))
+	defer secondary.Close()
+	s := failureGateway(t, retrySafetyConfig(
+		failureProvider("primary", primary.URL, 0),
+		failureProvider("secondary", secondary.URL, 100),
+	))
+
+	rr := retrySafetyChatRequest(t, s, failureChatBody, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want failover success", rr.Code, rr.Body.String())
+	}
+	if got := primaryHits.Load(); got != 1 {
+		t.Fatalf("primary hits=%d, want 1", got)
+	}
+	if got := secondaryHits.Load(); got != 1 {
+		t.Fatalf("secondary hits=%d, want 1: a 429 must fail over once", got)
+	}
+	if !retrySafetyHasKind(s, "ambiguous_outcome") {
+		t.Fatal("HTTP 429 failover must record ambiguous_outcome before replaying to the secondary")
+	}
+}
+
+// OpenAI parallel: a 401 failover must NOT record ambiguous_outcome.
+func TestRetrySafetyOpenAIHTTPStatusAuthFailoverNotAmbiguous(t *testing.T) {
+	var primaryHits, secondaryHits atomic.Int64
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = io.WriteString(w, `{"error":{"message":"invalid key","type":"invalid_request_error"}}`)
+	}))
+	defer primary.Close()
+	secondary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondaryHits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, failureOKBody)
+	}))
+	defer secondary.Close()
+	s := failureGateway(t, retrySafetyConfig(
+		failureProvider("primary", primary.URL, 0),
+		failureProvider("secondary", secondary.URL, 100),
+	))
+
+	rr := retrySafetyChatRequest(t, s, failureChatBody, "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want failover success", rr.Code, rr.Body.String())
+	}
+	if got := secondaryHits.Load(); got != 1 {
+		t.Fatalf("secondary hits=%d, want 1: a 401 must fail over once", got)
+	}
+	if retrySafetyHasKind(s, "ambiguous_outcome") {
+		t.Fatal("HTTP 401 failover must not record ambiguous_outcome: execution is proven pre-execution")
+	}
+}
