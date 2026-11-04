@@ -203,7 +203,7 @@ func TestSQLStoreDeleteResultAndFailureCases(t *testing.T) {
 		{"deleted", &scriptedSQL{affected: 1}, nil},
 		{"stale revision", &scriptedSQL{affected: 0, rowValues: []driver.Value{int64(7)}}, ErrConflict},
 		{"missing namespace", &scriptedSQL{affected: 0}, ErrNotFound},
-		{"exec error", &scriptedSQL{execErr: errors.New("write failed")}, errors.New("delete control snapshot")},
+		{"exec error", &scriptedSQL{execErr: errors.New("write failed"), execFailSubstring: "DELETE FROM"}, errors.New("delete control snapshot")},
 		{"result error", &scriptedSQL{affectedErr: errors.New("rows affected unavailable")}, errors.New("control delete result")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -222,6 +222,48 @@ func TestSQLStoreDeleteResultAndFailureCases(t *testing.T) {
 				t.Fatalf("Delete err=%v want=%v", err, tc.want)
 			}
 		})
+	}
+}
+
+// Put must fail closed when its UPDATE matches zero rows: a concurrent
+// Delete removed the row after this transaction read it. Without the
+// RowsAffected check Put would commit and report success while the
+// namespace is gone.
+func TestSQLStorePutUpdateZeroRowsReportsConflict(t *testing.T) {
+	ctx := context.Background()
+	state := &scriptedSQL{rowValues: []driver.Value{int64(3), int64(2)}, affected: 0}
+	store, err := NewSQLStore(openScriptedDB(t, state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(ctx, "config", 3, []byte("next")); !errors.Is(err, ErrConflict) {
+		t.Fatalf("zero-row update err=%v, want ErrConflict", err)
+	}
+	if state.commits != 0 || state.rollbacks != 1 {
+		t.Fatalf("zero-row update must roll back and not commit: commits=%d rollbacks=%d", state.commits, state.rollbacks)
+	}
+	if len(state.execs) < 2 || !strings.Contains(state.execs[0], "pg_advisory_xact_lock") || !strings.Contains(state.execs[1], "UPDATE") {
+		t.Fatalf("expected namespace lock then UPDATE execs: %v", state.execs)
+	}
+}
+
+// Delete must take the same namespace advisory lock as Put inside its
+// transaction, then delete, then commit, so writers serialize per namespace.
+func TestSQLStoreDeleteTakesNamespaceLockBeforeDeleting(t *testing.T) {
+	ctx := context.Background()
+	state := &scriptedSQL{affected: 1}
+	store, err := NewSQLStore(openScriptedDB(t, state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(ctx, "config", 3); err != nil {
+		t.Fatal(err)
+	}
+	if state.commits != 1 || state.rollbacks != 0 {
+		t.Fatalf("delete must commit: commits=%d rollbacks=%d", state.commits, state.rollbacks)
+	}
+	if len(state.execs) < 2 || !strings.Contains(state.execs[0], "pg_advisory_xact_lock") || !strings.Contains(state.execs[1], "DELETE FROM") {
+		t.Fatalf("expected namespace lock then DELETE execs: %v", state.execs)
 	}
 }
 

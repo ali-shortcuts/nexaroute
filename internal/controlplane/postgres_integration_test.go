@@ -200,6 +200,73 @@ func TestPostgresIntegrationConcurrentFirstWriteRace(t *testing.T) {
 	}
 }
 
+// Regression for audit #830 / issue #834: a concurrent Delete must not
+// let Put report success when its UPDATE matches zero rows. Put and Delete
+// now take the same namespace advisory lock, so writers serialize; exactly
+// one writer succeeds and the rest report ErrConflict. Put never reports
+// false success against a namespace a Delete removed.
+func TestPostgresIntegrationPutDeleteRace(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLStore(integrationDB(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := uniqueNamespace(t)
+	if _, err := store.Put(ctx, ns, 0, []byte("base")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	const workers = 8
+	var wg sync.WaitGroup
+	putErrs := make([]error, workers)
+	delErrs := make([]error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			_, putErrs[i] = store.Put(ctx, ns, 1, []byte(fmt.Sprintf("putter-%d", i)))
+		}(i)
+		go func(i int) {
+			defer wg.Done()
+			delErrs[i] = store.Delete(ctx, ns, 1)
+		}(i)
+	}
+	wg.Wait()
+	putSuccesses := 0
+	for i, err := range putErrs {
+		switch {
+		case err == nil:
+			putSuccesses++
+		case errors.Is(err, ErrConflict):
+		default:
+			t.Fatalf("putter %d: unexpected error %v", i, err)
+		}
+	}
+	deleteSuccesses := 0
+	for i, err := range delErrs {
+		switch {
+		case err == nil:
+			deleteSuccesses++
+		case errors.Is(err, ErrConflict):
+		default:
+			t.Fatalf("deleter %d: unexpected error %v", i, err)
+		}
+	}
+	if putSuccesses+deleteSuccesses != 1 {
+		t.Fatalf("expected exactly one successful writer, got putSuccesses=%d deleteSuccesses=%d", putSuccesses, deleteSuccesses)
+	}
+	got, err := store.Get(ctx, ns)
+	switch {
+	case err == nil:
+		if got.Revision != 2 {
+			t.Fatalf("unexpected final revision %d, want 2", got.Revision)
+		}
+	case errors.Is(err, ErrNotFound):
+		// a Delete won
+	default:
+		t.Fatalf("unexpected get error %v", err)
+	}
+}
+
 func TestPostgresIntegrationMigrationsIdempotentChecksumAndConcurrent(t *testing.T) {
 	ctx := context.Background()
 	db := integrationDB(t) // already migrated once by the helper
