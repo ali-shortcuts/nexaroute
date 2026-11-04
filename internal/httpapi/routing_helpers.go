@@ -189,6 +189,16 @@ func errorTypeForStatus(code int) string { return policyForStatus(code).ErrorTyp
 func retryable(code int) bool            { return policyForStatus(code).Failover }
 func failoverEligible(code int) bool     { return policyForStatus(code).Failover }
 
+// executionUnknownStatus reports whether a received upstream status
+// leaves provider-side execution unknown (429, 408, and 5xx): per
+// docs/RETRY_SAFETY.md, a pre-commit replay after such a status may
+// duplicate provider-side work and must be recorded as
+// ambiguous_outcome before continuing. Auth/validation rejections
+// (401/403/404) are proven pre-execution and are not ambiguous.
+func executionUnknownStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status == http.StatusRequestTimeout || status >= 500
+}
+
 func retryAfterDuration(h http.Header, max time.Duration) time.Duration {
 	fallback := 30 * time.Second
 	if max > 0 && fallback > max {

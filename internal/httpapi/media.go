@@ -245,6 +245,9 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		if kind.multipart() {
 			rewritten, ct, rerr := rewriteMultipartModel(raw, r.Header.Get("Content-Type"), c.Deployment.Model)
 			if rerr != nil {
+				// Gateway-side failure before any upstream attempt: release
+				// the admission budget hold (Wave C-4).
+				s.budgetRelease(r)
 				errorJSON(w, http.StatusBadRequest, rerr.Error())
 				return
 			}
@@ -253,6 +256,9 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request, kind mediaKi
 		} else {
 			patched, perr := patchJSONModel(raw, c.Deployment.Model)
 			if perr != nil {
+				// Gateway-side failure before any upstream attempt: release
+				// the admission budget hold (Wave C-4).
+				s.budgetRelease(r)
 				errorJSON(w, http.StatusBadRequest, "request body must be valid JSON with a model field")
 				return
 			}
