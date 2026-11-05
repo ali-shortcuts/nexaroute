@@ -490,6 +490,9 @@ func TestResolveLiveAdminURL(t *testing.T) {
 		{"https://example.test:8443/", "127.0.0.1:8080", "https://example.test:8443", false},
 		{"", "127.0.0.1:8080", "http://127.0.0.1:8080", false},
 		{"", ":8080", "http://127.0.0.1:8080", false},
+		{"", "0.0.0.0:8080", "http://127.0.0.1:8080", false},
+		{"", "[::]:8080", "http://127.0.0.1:8080", false},
+		{"", "[::1]:8080", "http://[::1]:8080", false},
 		{"", "", "", true},
 		{"", "/tmp/gateway.sock", "", true},
 	}

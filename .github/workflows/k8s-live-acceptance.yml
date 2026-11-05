@@ -1,6 +1,6 @@
 name: Kubernetes live acceptance
 
-# Manual, opt-in runner for issue #650. It executes
+# Manual and PR-triggered runner for issue #650. It executes
 # `scripts/k8s-acceptance.sh --live` on a GitHub-hosted runner, which has a
 # working container runtime. The script creates and deletes its OWN disposable
 # kind cluster; it never touches an existing cluster and uses only sentinel
@@ -12,6 +12,16 @@ name: Kubernetes live acceptance
 # 3 = NOT_RUN (a prerequisite was missing; this is NOT a pass).
 
 on:
+  # Run the fully disposable kind acceptance automatically when a PR changes
+  # the acceptance harness or Helm chart. This ensures the corrected runner
+  # is exercised on the exact reviewed PR head instead of relying on a manual
+  # workflow_dispatch that may be forgotten.
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/k8s-acceptance.sh"
+      - "deploy/helm/nexaroute/**"
+      - ".github/workflows/k8s-live-acceptance.yml"
   workflow_dispatch:
     inputs:
       prev_tag:
@@ -61,8 +71,8 @@ jobs:
       - name: Run live acceptance
         id: live
         env:
-          PREV_TAG: ${{ inputs.prev_tag }}
-          WITH_POSTGRES: ${{ inputs.with_postgres }}
+          PREV_TAG: ${{ inputs.prev_tag || 'v0.24.0' }}
+          WITH_POSTGRES: ${{ inputs.with_postgres || 'true' }}
         run: |
           set -uo pipefail
           args=(--live --prev-tag "$PREV_TAG" --out-dir "$GITHUB_WORKSPACE/k8s-acceptance-out")
