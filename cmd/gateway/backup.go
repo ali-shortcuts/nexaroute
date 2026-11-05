@@ -235,7 +235,7 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 		}
 		keyRef, versions, ierr := secrets.TransitEnvelopeInfo(configBytes)
 		if ierr != nil {
-			return fmt.Errorf("Transit envelope manifest: %w", ierr)
+			return fmt.Errorf("transit envelope manifest: %w", ierr)
 		}
 		manifest.EnvelopeVersions = []string{"nxs2"}
 		manifest.TransitKeyRefSHA256 = keyRef

@@ -1414,26 +1414,6 @@ func (w *Continue95HttpapiErrorWriter) Write([]byte) (int, error) {
 }
 func (w *Continue95HttpapiErrorWriter) WriteHeader(int) {}
 
-func Continue95HttpapiGeminiGatewayStrategy(t *testing.T, ups []*Continue95HttpapiFakeUpstream, maxAttempts int, strategy string) *Server {
-	t.Helper()
-	cfg := config.Default()
-	cfg.Probe.Enabled = false
-	cfg.Routing.MaxAttempts = maxAttempts
-	cfg.Routing.Strategy = strategy
-	for i, up := range ups {
-		srv := httptest.NewServer(up)
-		t.Cleanup(srv.Close)
-		priority := i
-		cfg.Providers = append(cfg.Providers, config.ProviderConfig{
-			ID: "g" + string(rune('a'+i)), Name: "test upstream", Type: "openai_compatible", BaseURL: srv.URL, AuthMode: "none", Enabled: true, MaxConcurrency: 8,
-			Models: []config.ModelConfig{{ID: "m", Model: "upstream-model", Enabled: true, Weight: 1, Priority: priority,
-				Capabilities: config.Capabilities{Streaming: true, Tools: true, Reasoning: true, Vision: true}}},
-		})
-	}
-	s := testGateway(t, cfg)
-	s.SyncCapabilityContracts()
-	return s
-}
 
 func TestContinue95HttpapiCompatDirect(t *testing.T) {
 	srv := Continue95HttpapiGeminiGateway(t, []*Continue95HttpapiFakeUpstream{{}}, 1)

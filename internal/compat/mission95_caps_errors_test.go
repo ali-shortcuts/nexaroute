@@ -260,7 +260,7 @@ func TestMission95ErrorFields(t *testing.T) {
 	if code != "" || typ != "" || msg != "" {
 		t.Fatalf("empty: %q %q %q", code, typ, msg)
 	}
-	code, typ, msg = providerErrorFields([]byte(`{bad`))
+	_, _, msg = providerErrorFields([]byte(`{bad`))
 	if msg != `{bad` {
 		t.Fatalf("invalid json: %q", msg)
 	}

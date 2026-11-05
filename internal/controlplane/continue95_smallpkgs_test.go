@@ -559,9 +559,8 @@ func TestContinue95FileStoreMoreBranches(t *testing.T) {
 		{"wrong schema", `{"schema": 2, "snapshots": {}}`},
 		{"nil snapshots", `{"schema": 1}`},
 	} {
-		p := filepath.Join(dir, "bad-"+tc.name+".json")
 		// Avoid spaces in the file name for the first case only.
-		p = filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-")+".json")
+		p := filepath.Join(dir, strings.ReplaceAll(tc.name, " ", "-")+".json")
 		if err := os.WriteFile(p, []byte(tc.body), 0o600); err != nil {
 			t.Fatal(err)
 		}

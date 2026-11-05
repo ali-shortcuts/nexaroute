@@ -1094,7 +1094,7 @@ func vaultHTTP(ctx context.Context, client *http.Client, addr, token, method, pa
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, nil, errors.New("Vault request failed")
+		return 0, nil, errors.New("vault request failed")
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, vaultAcceptMaxBody+1))

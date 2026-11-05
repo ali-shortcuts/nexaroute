@@ -16,10 +16,6 @@ func mission95AnthBlocks(blocks []map[string]any) json.RawMessage {
 	return raw
 }
 
-func mission95AnthTextMsg(role, text string) core.AnthMessage {
-	return core.AnthMessage{Role: role, Content: mission95AnthBlocks([]map[string]any{{"type": "text", "text": text}})}
-}
-
 // --- Anthropic -> OpenAI ------------------------------------------------------
 
 func TestMission95AnthropicSingleStopAndEmptyAndBadContent(t *testing.T) {

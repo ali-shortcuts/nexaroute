@@ -72,16 +72,6 @@ func (f *fakeTransitServer) revoke(version int) {
 	f.revoked[version] = true
 }
 
-func (f *fakeTransitServer) counts() map[string]int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := map[string]int{}
-	for _, r := range f.requests {
-		out[r.op]++
-	}
-	return out
-}
-
 func (f *fakeTransitServer) handler(w http.ResponseWriter, r *http.Request) {
 	if f.slow > 0 {
 		time.Sleep(f.slow)
