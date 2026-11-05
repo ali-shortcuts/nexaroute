@@ -54,7 +54,7 @@ type fakeCostConn struct {
 }
 
 func (c *fakeCostConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("fake cost: Prepare is not used")
+	return nil, errors.New("fake cost: prepare is not used")
 }
 func (c *fakeCostConn) Close() error {
 	if c.db.failClose {

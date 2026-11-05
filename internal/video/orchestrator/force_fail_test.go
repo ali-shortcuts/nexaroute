@@ -37,7 +37,7 @@ func TestForceFailAfterComfyUIRefusesCancelFencesInFlightCompletion(t *testing.T
 	p.id = "comfyui"
 	p.estimate.Provider = "comfyui"
 	p.submit = video.ProviderJob{ProviderJobID: "comfyui-remote", Provider: "comfyui", Model: "model-a", Accepted: true}
-	p.cancelErr = errors.New("ComfyUI refused cancellation for running job")
+	p.cancelErr = errors.New("comfyui refused cancellation for running job")
 	actual := 1.25
 	p.statuses = []video.ProviderJobStatus{{
 		ProviderJobID: "comfyui-remote", State: video.StateCompleted, Progress: 1,

@@ -539,29 +539,29 @@ func acceptanceHTTPClient(timeout time.Duration) *http.Client {
 
 func fetchOIDCJWKS(ctx context.Context, jwksURL string, timeout time.Duration) (int, error) {
 	if !validAcceptanceOIDCEndpoint(jwksURL, jwksURL) {
-		return 0, errors.New("JWKS endpoint is not an absolute HTTPS URL (HTTP loopback is allowed only for loopback issuers)")
+		return 0, errors.New("jwks endpoint is not an absolute HTTPS URL (HTTP loopback is allowed only for loopback issuers)")
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, jwksURL, nil)
 	if err != nil {
-		return 0, errors.New("JWKS request could not be created")
+		return 0, errors.New("jwks request could not be created")
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := acceptanceHTTPClient(timeout).Do(req)
 	if err != nil {
-		return 0, errors.New("JWKS request failed: " + err.Error())
+		return 0, errors.New("jwks request failed: " + err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return 0, fmt.Errorf("JWKS endpoint returned HTTP %d", resp.StatusCode)
+		return 0, fmt.Errorf("jwks endpoint returned HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, externalAcceptMaxBody+1))
 	if err != nil {
-		return 0, errors.New("JWKS response could not be read")
+		return 0, errors.New("jwks response could not be read")
 	}
 	if len(body) > externalAcceptMaxBody {
-		return 0, fmt.Errorf("JWKS response exceeds the %d-byte bound", externalAcceptMaxBody)
+		return 0, fmt.Errorf("jwks response exceeds the %d-byte bound", externalAcceptMaxBody)
 	}
 	var doc struct {
 		Keys []struct {
@@ -571,7 +571,7 @@ func fetchOIDCJWKS(ctx context.Context, jwksURL string, timeout time.Duration) (
 		} `json:"keys"`
 	}
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return 0, errors.New("JWKS response is not valid JSON")
+		return 0, errors.New("jwks response is not valid JSON")
 	}
 	count := 0
 	for _, key := range doc.Keys {
@@ -580,7 +580,7 @@ func fetchOIDCJWKS(ctx context.Context, jwksURL string, timeout time.Duration) (
 		}
 	}
 	if count == 0 {
-		return 0, errors.New("JWKS response contained no usable signing key")
+		return 0, errors.New("jwks response contained no usable signing key")
 	}
 	return count, nil
 }
@@ -599,23 +599,23 @@ func verifyAcceptanceIDToken(ctx context.Context, rawToken, issuer, jwksURL stri
 		&oidc.Config{ClientID: expectedAudience})
 	token, err := verifier.Verify(fetchCtx, rawToken)
 	if err != nil {
-		return -1, errors.New("OIDC ID token verification failed")
+		return -1, errors.New("oidc ID token verification failed")
 	}
 	if token.Issuer != issuer || strings.TrimSpace(token.Subject) == "" {
-		return -1, errors.New("OIDC ID token issuer or subject is invalid")
+		return -1, errors.New("oidc ID token issuer or subject is invalid")
 	}
 	if !containsAudienceString(token.Audience, expectedAudience) {
-		return -1, errors.New("OIDC ID token audience is invalid")
+		return -1, errors.New("oidc ID token audience is invalid")
 	}
 	roleCount := -1
 	if strings.TrimSpace(cfg.RoleClaim) != "" && len(cfg.RoleMappings) > 0 {
 		var claims map[string]json.RawMessage
 		if err := token.Claims(&claims); err != nil {
-			return -1, errors.New("OIDC ID token claims are malformed")
+			return -1, errors.New("oidc ID token claims are malformed")
 		}
 		values, err := oidcClaimStrings(claims[cfg.RoleClaim])
 		if err != nil {
-			return -1, errors.New("OIDC role claim has an invalid type")
+			return -1, errors.New("oidc role claim has an invalid type")
 		}
 		roles := map[string]bool{}
 		for _, value := range values {
@@ -624,10 +624,10 @@ func verifyAcceptanceIDToken(ctx context.Context, rawToken, issuer, jwksURL stri
 			}
 		}
 		if len(roles) == 0 {
-			return -1, errors.New("OIDC identity has no allowlisted role")
+			return -1, errors.New("oidc identity has no allowlisted role")
 		}
 		if len(roles) != 1 {
-			return -1, errors.New("OIDC identity has conflicting allowlisted roles")
+			return -1, errors.New("oidc identity has conflicting allowlisted roles")
 		}
 		roleCount = len(roles)
 	}

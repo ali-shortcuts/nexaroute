@@ -417,7 +417,7 @@ func gameDayClockSkew(t *testing.T) error {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	return fmt.Errorf("A never returned to rotation within 8s (hits=%d): the 24h Retry-After hint parked it beyond the configured caps", aHits.Load())
+	return fmt.Errorf("a never returned to rotation within 8s (hits=%d): the 24h Retry-After hint parked it beyond the configured caps", aHits.Load())
 }
 
 // writeGameDayScorecard emits the scenario × invariant × pass/fail matrix. It

@@ -109,7 +109,7 @@ func (sr *SSEReader) Next() (name, data string, done bool, err error) {
 			if sr.data.Len()+extra > maxSSEEventBytes {
 				sr.done = true
 				sr.data.Reset()
-				return "", "", false, fmt.Errorf("SSE event exceeds safe limit %d bytes", maxSSEEventBytes)
+				return "", "", false, fmt.Errorf("sse event exceeds safe limit %d bytes", maxSSEEventBytes)
 			}
 			if sr.data.Len() > 0 {
 				sr.data.WriteByte('\n')

@@ -42,7 +42,7 @@ func ServerTLSConfig(cfg config.TLSConfig, configDir string) (*tls.Config, error
 			}
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM(pem) {
-				return nil, errors.New("TLS client CA file contains no valid certificates")
+				return nil, errors.New("tls client CA file contains no valid certificates")
 			}
 			result.ClientCAs = pool
 			result.ClientAuth = tls.VerifyClientCertIfGiven
