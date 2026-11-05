@@ -1718,11 +1718,11 @@ PYEOF
   # call in an OR-list disables Bash errexit inside the whole function,
   # allowing failed kubectl exec commands to be followed by false PASS lines.
   local errexit_code=0
-  "$BASH" -c 'set -e; fail_now() { false; printf "unreachable\\n"; }; fail_now' \
+  "$BASH" -c 'set -e; fail_now() { false; printf "unreachable"; }; fail_now' \
     >"$tmp/errexit.log" 2>&1 || errexit_code=$?
   if [[ "$errexit_code" -ne 0 ]] \
       && ! grep -q "unreachable" "$tmp/errexit.log" \
-      && ! grep -Eq '^[[:space:]]*live_phase[[:space:]]*\\|\\|' "$0"; then
+            && ! grep -Fq 'live_phase || live_code=$?' "$0"; then
     ok "self-test: live phase preserves errexit and cannot mask failed required commands"
   else
     fail "self-test: live phase is wrapped in an OR-list or shell errexit regression was not detected"
@@ -1745,7 +1745,7 @@ for line in lines[start + 1:]:
         body.append("")
     else:
         break
-source = "\\n".join(body).rstrip() + "\\n"
+source = chr(10).join(body).rstrip() + chr(10)
 required = (
     "signal.signal(signal.SIGTERM, stop_server)",
     "threading.Thread(target=server.shutdown, daemon=True).start()",
