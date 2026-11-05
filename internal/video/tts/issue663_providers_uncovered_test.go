@@ -273,7 +273,7 @@ func TestIssue663ProvidersPiperRunErrorsAndDefaultBinary(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := filepath.Join(dir, "f.wav")
-	if err := p.Synthesize(context.Background(), "hi", out); err == nil || err.Error() != "Piper narration synthesis failed" {
+	if err := p.Synthesize(context.Background(), "hi", out); err == nil || err.Error() != "piper narration synthesis failed" {
 		t.Fatalf("false binary err=%v, want generic synthesis failure", err)
 	}
 	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {

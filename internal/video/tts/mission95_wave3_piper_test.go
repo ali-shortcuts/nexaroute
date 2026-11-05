@@ -88,7 +88,7 @@ func TestWave3TTSSynthesizeSilentFailureGenericMessage(t *testing.T) {
 	}
 	output := filepath.Join(dir, "out.wav")
 	err = p.Synthesize(context.Background(), "hello", output)
-	if err == nil || err.Error() != "Piper narration synthesis failed" {
+	if err == nil || err.Error() != "piper narration synthesis failed" {
 		t.Fatalf("silent failure error = %v, want the exact generic message", err)
 	}
 	if _, statErr := os.Stat(output); !os.IsNotExist(statErr) {

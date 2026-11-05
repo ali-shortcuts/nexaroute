@@ -6,6 +6,8 @@ echo '== go version =='
 go version
 echo '== shell syntax =='
 bash -n scripts/*.sh
+echo '== analyzer annotation regression checks =='
+python3 scripts/test-analysis-annotations.py
 echo '== final release gate regression tests =='
 bash .github/scripts/test-final-release-gate.sh
 echo '== HA documentation consistency =='

@@ -165,7 +165,7 @@ func (r *Router) Explain(req Requirement) Explanation {
 	exp := Explanation{
 		Simulated:              true,
 		Deterministic:          true,
-		RotationPredictive:     !IsRotatingStrategy(cfg.Routing.Strategy) && !(cfg.Routing.Strategy == "ready_mesh" && req.SelectionKey == "" && req.SessionKey == ""),
+		RotationPredictive:     !IsRotatingStrategy(cfg.Routing.Strategy) && (cfg.Routing.Strategy != "ready_mesh" || req.SelectionKey != "" || req.SessionKey != ""),
 		Strategy:               cfg.Routing.Strategy,
 		Model:                  req.Model,
 		KnownModel:             known,

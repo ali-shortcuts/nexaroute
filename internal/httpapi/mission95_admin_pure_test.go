@@ -273,7 +273,10 @@ func TestMission95ServerAdmissionAndLogging(t *testing.T) {
 	}
 	// tryAcquire/release: admission stops at the limit and never goes negative.
 	s.cfg.Routing.MaxInflightRequests = 2
-	if !s.tryAcquireDataPlane() || !s.tryAcquireDataPlane() || s.tryAcquireDataPlane() {
+	firstAcquire := s.tryAcquireDataPlane()
+	secondAcquire := s.tryAcquireDataPlane()
+	thirdAcquire := s.tryAcquireDataPlane()
+	if !firstAcquire || !secondAcquire || thirdAcquire {
 		t.Error("admission limit not enforced")
 	}
 	s.releaseDataPlane()
@@ -357,7 +360,9 @@ func TestMission95ServerAdmissionAndLogging(t *testing.T) {
 		t.Errorf("bucket burst = %d, want 90", allowed)
 	}
 	// A fresh IP gets its own full bucket, independent of the drained one.
-	if !allowServer.adminAllow("10.0.0.2", 1) || !allowServer.adminAllow("10.0.0.2", 1) {
+	firstFreshAllow := allowServer.adminAllow("10.0.0.2", 1)
+	secondFreshAllow := allowServer.adminAllow("10.0.0.2", 1)
+	if !firstFreshAllow || !secondFreshAllow {
 		t.Error("fresh IP bucket denied immediately")
 	}
 	if !allowServer.adminAllow("10.0.0.1", 0) {

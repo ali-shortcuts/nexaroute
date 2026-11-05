@@ -147,6 +147,7 @@ func TestMission95QuotaEstimateEdges(t *testing.T) {
 	if got, ok := quotaEstimateFromContext(ctx); !ok || got != maxQuotaEstimateTokens {
 		t.Fatalf("overflow estimate=%d ok=%v want clamped %d", got, ok, maxQuotaEstimateTokens)
 	}
+	//lint:ignore SA1012 this test verifies the nil-context quota guard.
 	if got, ok := quotaEstimateFromContext(nil); ok || got != 0 {
 		t.Fatalf("nil ctx estimate=%d ok=%v want 0/false", got, ok)
 	}

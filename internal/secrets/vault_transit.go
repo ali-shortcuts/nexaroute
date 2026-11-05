@@ -126,23 +126,23 @@ func NewVaultTransitProvider(addr, token, namespace, mount, key string, timeout 
 func parseTransitAddress(raw string) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, errors.New("Vault Transit address is required (set VAULT_ADDR)")
+		return nil, errors.New("vault transit address is required (set VAULT_ADDR)")
 	}
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" || u.Hostname() == "" {
-		return nil, errors.New("Vault Transit address must be an absolute URL")
+		return nil, errors.New("vault transit address must be an absolute URL")
 	}
 	if u.Scheme != "https" && u.Scheme != "http" {
-		return nil, errors.New("Vault Transit address must use https (http is allowed only for loopback development)")
+		return nil, errors.New("vault transit address must use https (http is allowed only for loopback development)")
 	}
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return nil, errors.New("Vault Transit address must not contain userinfo, query, or fragment")
+		return nil, errors.New("vault transit address must not contain userinfo, query, or fragment")
 	}
 	if u.Scheme == "http" {
 		host := u.Hostname()
 		ip := net.ParseIP(host)
 		if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
-			return nil, errors.New("Vault Transit address may use http only for loopback development")
+			return nil, errors.New("vault transit address may use http only for loopback development")
 		}
 	}
 	return u, nil
@@ -190,7 +190,7 @@ type transitRewrapResponse struct {
 // WrapDEK encrypts a 32-byte DEK under the configured Transit key.
 func (p *VaultTransitProvider) WrapDEK(ctx context.Context, dek []byte) (string, int, error) {
 	if len(dek) != 32 {
-		return "", 0, errors.New("Vault Transit requires a 32-byte data key")
+		return "", 0, errors.New("vault transit requires a 32-byte data key")
 	}
 	var out transitEncryptResponse
 	if err := p.do(ctx, "encrypt", transitEncryptRequest{

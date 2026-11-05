@@ -18,7 +18,7 @@ func readJSON(r *http.Request, dst any) ([]byte, error) {
 	if strings.HasPrefix(r.URL.Path, "/admin/api/") {
 		ct := strings.ToLower(strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0]))
 		if ct != "application/json" {
-			return nil, fmt.Errorf("Content-Type must be application/json")
+			return nil, fmt.Errorf("content type must be application/json")
 		}
 	}
 	b, err := io.ReadAll(io.LimitReader(r.Body, maxJSONBodyBytes+1))
@@ -97,7 +97,7 @@ func validateOpenAIResponseJSON(b []byte) error {
 		return fmt.Errorf("invalid OpenAI response JSON: %w", err)
 	}
 	if raw, ok := root["error"]; ok && len(raw) > 0 && string(raw) != "null" {
-		return fmt.Errorf("OpenAI response contains an error envelope")
+		return fmt.Errorf("openai response contains an error envelope")
 	}
 	rawChoices := root["choices"]
 	if len(rawChoices) == 0 {

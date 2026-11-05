@@ -133,7 +133,7 @@ func (p Provenance) Validate() error {
 			return errors.New("quality gate route_config_hash must be a 64-character hex digest when present")
 		}
 		for _, r := range p.RouteConfigHash {
-			if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
 				return errors.New("quality gate route_config_hash must be hex")
 			}
 		}

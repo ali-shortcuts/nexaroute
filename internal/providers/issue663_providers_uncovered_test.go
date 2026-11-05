@@ -107,17 +107,21 @@ func TestIssue663ProvidersOpencodeCanonicalKind(t *testing.T) {
 
 // Session and scope context helpers tolerate a nil parent context.
 func TestIssue663ProvidersNilContextHelpers(t *testing.T) {
+	//lint:ignore SA1012 this test verifies the documented nil-parent fallback.
 	ctx := WithSessionKey(nil, "conv-1")
 	if got, ok := SessionKeyFromContext(ctx); !ok || got != "conv-1" {
 		t.Fatalf("session key from nil-parent context = (%q, %v), want (conv-1, true)", got, ok)
 	}
+	//lint:ignore SA1012 this test verifies nil input reports no session key.
 	if _, ok := SessionKeyFromContext(nil); ok {
 		t.Fatal("nil context reported a session key")
 	}
+	//lint:ignore SA1012 this test verifies the documented nil-parent fallback.
 	sctx := WithClientScope(nil, "tenant-1")
 	if got, ok := ClientScopeFromContext(sctx); !ok || got != "tenant-1" {
 		t.Fatalf("client scope from nil-parent context = (%q, %v), want (tenant-1, true)", got, ok)
 	}
+	//lint:ignore SA1012 this test verifies nil input reports no client scope.
 	if _, ok := ClientScopeFromContext(nil); ok {
 		t.Fatal("nil context reported a client scope")
 	}

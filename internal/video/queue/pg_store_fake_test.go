@@ -49,7 +49,7 @@ type fakeQueueConn struct {
 }
 
 func (c *fakeQueueConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("fake queue: Prepare is not used")
+	return nil, errors.New("fake queue: prepare is not used")
 }
 func (c *fakeQueueConn) Close() error {
 	if c.db.failClose {

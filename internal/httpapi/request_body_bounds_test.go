@@ -92,7 +92,7 @@ func bodyReadFindings(name string, src []byte) (int, []string, error) {
 				return true
 			}
 			id, ok := s.X.(*ast.Ident)
-			if !ok || !((id.Name == "json" && s.Sel.Name == "NewDecoder") || (id.Name == "io" && s.Sel.Name == "ReadAll")) {
+			if !ok || ((id.Name != "json" || s.Sel.Name != "NewDecoder") && (id.Name != "io" || s.Sel.Name != "ReadAll")) {
 				return true
 			}
 			arg := c.Args[0]

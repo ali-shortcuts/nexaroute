@@ -279,7 +279,7 @@ func TestPiperSynthesizeBehaviors(t *testing.T) {
 	// Failure redacts the model, input and output paths from the message.
 	t.Setenv("PIPER_MODE", "fail")
 	err = p.Synthesize(context.Background(), "hi", filepath.Join(dir, "redact.wav"))
-	if err == nil || !strings.Contains(err.Error(), "Piper narration synthesis failed:") {
+	if err == nil || !strings.Contains(err.Error(), "piper narration synthesis failed:") {
 		t.Fatalf("failure: %v", err)
 	}
 	for _, leak := range []string{model, ".nexaroute-piper-input-", "redact.wav"} {

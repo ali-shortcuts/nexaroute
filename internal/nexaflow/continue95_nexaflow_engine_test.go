@@ -2682,9 +2682,6 @@ func TestContinue95NexaflowEngineRetryPersistFailures(t *testing.T) {
 	// Backoff branch: a 1ms backoff still retries to success.
 	spec, _ = flaky()
 	reg = testRegistry(t, spec)
-	eng = mustEngine(t, NewMemoryStore(), reg, func(o *EngineOptions) {
-		o.Backoff = func(int) time.Duration { return time.Millisecond }
-	})
 	store := NewMemoryStore()
 	eng = mustEngine(t, store, reg, func(o *EngineOptions) {
 		o.Backoff = func(int) time.Duration { return time.Millisecond }

@@ -68,7 +68,7 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 				s.hasAny = true
 			case "event":
 				if s.eventBytes+len(value) > maxSSEEventBytes {
-					return sseEvent{}, false, fmt.Errorf("SSE event exceeds safe limit of %d bytes", maxSSEEventBytes)
+					return sseEvent{}, false, fmt.Errorf("sse event exceeds safe limit of %d bytes", maxSSEEventBytes)
 				}
 				s.event = value
 				s.eventBytes += len(value)
@@ -79,7 +79,7 @@ func (s *sseReader) Next() (ev sseEvent, done bool, err error) {
 					add++
 				}
 				if s.eventBytes+add > maxSSEEventBytes {
-					return sseEvent{}, false, fmt.Errorf("SSE event exceeds safe limit of %d bytes", maxSSEEventBytes)
+					return sseEvent{}, false, fmt.Errorf("sse event exceeds safe limit of %d bytes", maxSSEEventBytes)
 				}
 				if s.data.Len() > 0 {
 					s.data.WriteByte('\n')

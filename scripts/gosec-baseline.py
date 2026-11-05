@@ -87,6 +87,28 @@ def load_baseline(path):
     return entries
 
 
+def github_escape(value):
+    """Escape a value embedded in a GitHub Actions workflow command."""
+    return str(value).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def github_new_finding_annotation(fingerprint):
+    """Expose an actionable new fingerprint as a check-run annotation in CI.
+
+    The normal textual output remains useful locally. Actions logs and artifacts
+    can be unavailable to a reviewer, however, while check-run annotations stay
+    visible through the GitHub API. Keep this side effect Actions-only so local
+    baseline checks retain their conventional output.
+    """
+    if os.getenv("GITHUB_ACTIONS") != "true":
+        return
+    rule, path, source = fingerprint.split("\t", 2)
+    print(
+        "::error file=%s,title=gosec baseline finding::NEW %s: %s"
+        % (github_escape(path), github_escape(rule), github_escape(source))
+    )
+
+
 def main(argv):
     if len(argv) != 4 or argv[1] not in ("check", "write"):
         print(__doc__)
@@ -100,6 +122,9 @@ def main(argv):
               " its SSA/taint rules silently produced nothing." % len(load_errors))
         print("The finding list is incomplete and cannot be gated on.")
         print("First error: %s" % next(iter(load_errors.items()))[1][:1])
+        if os.getenv("GITHUB_ACTIONS") == "true":
+            print("::error title=gosec baseline analysis incomplete::"
+                  "gosec reported package-loading errors; inspect the job output.")
         return 1
 
     if mode == "write":
@@ -119,6 +144,7 @@ def main(argv):
         print("ERROR: %d gosec finding(s) not in the accepted baseline:" % len(new))
         for line in new:
             print("  NEW: %s" % line)
+            github_new_finding_annotation(line)
         print("Triage each at source. Fix it, or -- only if it is an")
         print("operator-controlled boundary operation -- regenerate the")
         print("baseline with `write` and justify the addition in the PR.")

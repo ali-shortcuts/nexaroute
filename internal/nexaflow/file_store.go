@@ -271,7 +271,7 @@ func (s *FileStore) persist(state *storeState) (renamed bool, err error) {
 		return false, fmt.Errorf("nexaflow: create file store temp: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	n, err := tmp.Write(raw)
 	if err == nil && n != len(raw) {
 		err = io.ErrShortWrite

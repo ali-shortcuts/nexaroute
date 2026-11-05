@@ -19,7 +19,7 @@ type replaceDraftAfterRead struct {
 func (s *replaceDraftAfterRead) GetDraft(ctx context.Context, id string) (Definition, error) {
 	draft, err := s.Store.GetDraft(ctx, id)
 	if err == nil {
-		err = s.Store.SaveDraft(ctx, s.replacement)
+		err = s.SaveDraft(ctx, s.replacement)
 	}
 	return draft, err
 }

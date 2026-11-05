@@ -30,24 +30,24 @@ func NewPiper(binary, modelPath string) (*Piper, error) {
 	}
 	resolvedBinary, err := exec.LookPath(binary)
 	if err != nil {
-		return nil, fmt.Errorf("Piper executable %q is unavailable", binary)
+		return nil, fmt.Errorf("piper executable %q is unavailable", binary)
 	}
 	modelPath = strings.TrimSpace(modelPath)
 	if modelPath == "" {
-		return nil, errors.New("Piper model path is required")
+		return nil, errors.New("piper model path is required")
 	}
 	modelPath, err = filepath.Abs(modelPath)
 	if err != nil {
-		return nil, errors.New("Piper model path could not be resolved")
+		return nil, errors.New("piper model path could not be resolved")
 	}
 	info, err := os.Stat(modelPath)
 	if err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("Piper voice model must be an existing regular file")
+		return nil, errors.New("piper voice model must be an existing regular file")
 	}
 	configPath := modelPath + ".json"
 	configInfo, err := os.Stat(configPath)
 	if err != nil || !configInfo.Mode().IsRegular() {
-		return nil, errors.New("Piper model JSON sidecar is missing or is not a regular file")
+		return nil, errors.New("piper model JSON sidecar is missing or is not a regular file")
 	}
 	return &Piper{Binary: resolvedBinary, ModelPath: modelPath}, nil
 }
@@ -55,7 +55,7 @@ func NewPiper(binary, modelPath string) (*Piper, error) {
 // Synthesize writes a WAV file to outputPath. The output must not already exist.
 func (p *Piper) Synthesize(ctx context.Context, text, outputPath string) error {
 	if p == nil || strings.TrimSpace(p.Binary) == "" || strings.TrimSpace(p.ModelPath) == "" {
-		return errors.New("Piper synthesizer is not configured")
+		return errors.New("piper synthesizer is not configured")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -116,14 +116,14 @@ func (p *Piper) Synthesize(ctx context.Context, text, outputPath string) error {
 		message = strings.ReplaceAll(message, inputPath, "[input-file]")
 		message = strings.ReplaceAll(message, outputPath, "[output-file]")
 		if message == "" {
-			return errors.New("Piper narration synthesis failed")
+			return errors.New("piper narration synthesis failed")
 		}
-		return fmt.Errorf("Piper narration synthesis failed: %s", message)
+		return fmt.Errorf("piper narration synthesis failed: %s", message)
 	}
 	info, err := os.Stat(outputPath)
 	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
 		_ = os.Remove(outputPath)
-		return errors.New("Piper completed without producing a non-empty regular output file")
+		return errors.New("piper completed without producing a non-empty regular output file")
 	}
 	return nil
 }

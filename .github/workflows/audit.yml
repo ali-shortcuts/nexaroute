@@ -43,6 +43,12 @@ jobs:
         with:
           version: v2.15.0
           args: --timeout=20m --output.text.path=golangci.txt --output.json.path=golangci.json
+      - name: Annotate golangci-lint findings
+        # Preserve source-level diagnostics even when artifact downloads are
+        # unavailable to a reviewer. This is diagnostic only; the action above
+        # remains the zero-baseline quality gate.
+        if: always()
+        run: python3 scripts/analysis-annotations.py golangci golangci.json
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -216,7 +222,14 @@ jobs:
           sudo apt-get install -y -qq ffmpeg > /dev/null
           ffmpeg -version | head -1
       - name: Test suite with coverage profile
-        run: go test -timeout=40m -count=1 -coverprofile=coverage.out ./...
+        run: |
+          set -o pipefail
+          go test -timeout=40m -count=1 -coverprofile=coverage.out ./... 2>&1 | tee coverage-test.txt
+      - name: Annotate Go test failures
+        # Keep assertion text reviewable even when the full test log artifact
+        # cannot be downloaded from the runner.
+        if: always()
+        run: python3 scripts/analysis-annotations.py gotest coverage-test.txt
       - name: Coverage reports
         if: always()
         run: |
@@ -247,6 +260,7 @@ jobs:
           path: |
             coverage.out
             coverage-func.txt
+            coverage-test.txt
           if-no-files-found: warn
 
   fuzz-extended:

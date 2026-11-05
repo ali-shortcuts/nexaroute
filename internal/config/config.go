@@ -1384,7 +1384,7 @@ func (c *Config) ApplyEnvOverrides() error {
 	if v, ok := os.LookupEnv("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY"); ok {
 		b, err := strconv.ParseBool(strings.TrimSpace(v))
 		if err != nil {
-			return fmt.Errorf("NEXAROUTE_ADMIN_BIND_LOCAL_ONLY must be a valid boolean: %w", err)
+			return fmt.Errorf("environment variable NEXAROUTE_ADMIN_BIND_LOCAL_ONLY must be a valid boolean: %w", err)
 		}
 		c.Admin.BindLocalOnly = b
 	}
@@ -1422,7 +1422,7 @@ func strictConfigEnabled() (bool, error) {
 	}
 	b, err := strconv.ParseBool(strings.TrimSpace(v))
 	if err != nil {
-		return false, fmt.Errorf("NEXAROUTE_STRICT_CONFIG must be a valid boolean: %w", err)
+		return false, fmt.Errorf("environment variable NEXAROUTE_STRICT_CONFIG must be a valid boolean: %w", err)
 	}
 	return b, nil
 }

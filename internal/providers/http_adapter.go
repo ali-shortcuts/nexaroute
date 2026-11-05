@@ -712,7 +712,7 @@ func (a *httpAdapter) DoPath(ctx context.Context, method, path string, payload [
 			// diagnostic on that request; see the docs limitation.
 			a.noteOpencodeEntitlementDenial(idx)
 		}
-		if idx >= 0 && credentialRetryStatus(resp.StatusCode) && !(IsOpencodeType(a.p.Type) && resp.StatusCode == http.StatusForbidden) {
+		if idx >= 0 && credentialRetryStatus(resp.StatusCode) && (!IsOpencodeType(a.p.Type) || resp.StatusCode != http.StatusForbidden) {
 			a.cooldownCredential(idx, resp.StatusCode, resp.Header.Get("Retry-After"))
 			if a.hasAvailableCredential(attempted) {
 				body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

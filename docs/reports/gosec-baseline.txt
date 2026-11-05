@@ -51,12 +51,14 @@ G304	internal/controlplane/filelock_linux.go	f, err := os.OpenFile(lockPath, os.
 G304	internal/controlplane/filestore.go	data, err := os.ReadFile(backup)
 G304	internal/controlplane/filestore.go	data, err := os.ReadFile(path)
 G304	internal/controlplane/filestore.go	if dirF, err := os.Open(dir); err == nil {
+G304	internal/controlplane/filestore.go	rename: os.Rename, openDir: func(dir string) (atomicDir, error) { return os.Open(dir) },
 G304	internal/desktop/desktop.go	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 G304	internal/eval/suites_load.go	data, err := os.ReadFile(f)
 G304	internal/eval/suites_load.go	data, err := os.ReadFile(trimmed)
 G304	internal/httpapi/evaluation_plane.go	data, err := os.ReadFile(path)
 G304	internal/httpapi/evaluation_state.go	data, err := os.ReadFile(path)
 G304	internal/nexaflow/file_store.go	d, err := os.Open(dir)
+G304	internal/nexaflow/file_store.go	openDir: func(path string) (fileStoreDir, error) { return os.Open(path) },
 G304	internal/nexaflow/file_store.go	raw, err := os.ReadFile(path)
 G304	internal/nexaflow/filelock_unix.go	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 G304	internal/nexaflow/task8_delivery.go	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
@@ -85,6 +87,7 @@ G304	internal/video/providers/coderender.go	data, err := os.ReadFile(output)
 G304	internal/video/providers/comfyui.go	data, err := os.ReadFile(workflowPath)
 G304	internal/video/queue/file_store.go	if d, openErr := os.Open(dir); openErr == nil {
 G304	internal/video/queue/file_store.go	if data, err := os.ReadFile(path); err == nil {
+G304	internal/video/queue/file_store.go	return jobStoreFS{mkdirAll: os.MkdirAll, createTemp: func(dir, pattern string) (jobStoreTemp, error) { return os.CreateTemp(dir, pattern) }, rename: os.Rename, openDir: func(path string) (jobStoreDir, error) { return os.Open(path) }}
 G304	internal/video/storage/local_filesystem.go	if d, openErr := os.Open(dir); openErr == nil {
 G304	internal/video/tts/audio.go	file, err := os.Open(path)
 G404	internal/secrets/vault_transit.go	jitter := time.Duration(rand.IntN(50)) * time.Millisecond

@@ -92,7 +92,7 @@ func wave4TextDeltas(frames []map[string]any) []string {
 	return texts
 }
 
-func wave4RunAnthropicStream(t *testing.T, sse string, failOn int) (*wave4SSEWriter, error, int, int) {
+func wave4RunAnthropicStream(t *testing.T, sse string, failOn int) (*wave4SSEWriter, int, int, error) {
 	t.Helper()
 	w := wave4NewSSEWriter(failOn)
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(sse))}
@@ -100,7 +100,7 @@ func wave4RunAnthropicStream(t *testing.T, sse string, failOn int) (*wave4SSEWri
 	err := streamOpenAIToAnthropicWithUsage(w, resp, "model-x", nil, func(prompt, completion int) {
 		gotPrompt, gotCompletion = prompt, completion
 	})
-	return w, err, gotPrompt, gotCompletion
+	return w, gotPrompt, gotCompletion, err
 }
 
 func wave4SSEData(jsonBody string) string { return "data: " + jsonBody + "\n\n" }
@@ -116,7 +116,7 @@ func strconvQuoteWave4(s string) string {
 
 func TestWave4AnthropicStreamEmptyDataSkipped(t *testing.T) {
 	sse := wave4TextChunk("hi") + "data:\n\n" + wave4TextChunk("!") + "data: [DONE]\n\n"
-	w, err, _, _ := wave4RunAnthropicStream(t, sse, 0)
+	w, _, _, err := wave4RunAnthropicStream(t, sse, 0)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -128,7 +128,7 @@ func TestWave4AnthropicStreamEmptyDataSkipped(t *testing.T) {
 
 func TestWave4AnthropicStreamUpstreamError(t *testing.T) {
 	sse := wave4SSEData(`{"error":{"type":"api_error","message":"boom"}}`)
-	w, err, _, _ := wave4RunAnthropicStream(t, sse, 0)
+	w, _, _, err := wave4RunAnthropicStream(t, sse, 0)
 	if err == nil || err.Error() != "openai stream error" {
 		t.Fatalf("err = %v, want openai stream error", err)
 	}
@@ -145,7 +145,7 @@ func TestWave4AnthropicStreamUpstreamError(t *testing.T) {
 
 func TestWave4AnthropicStreamInvalidChunkShape(t *testing.T) {
 	sse := wave4SSEData(`{"choices":"not-an-array"}`)
-	w, err, _, _ := wave4RunAnthropicStream(t, sse, 0)
+	w, _, _, err := wave4RunAnthropicStream(t, sse, 0)
 	if err == nil || !strings.Contains(err.Error(), "invalid OpenAI SSE chunk") {
 		t.Fatalf("err = %v, want invalid OpenAI SSE chunk", err)
 	}
@@ -158,7 +158,7 @@ func TestWave4AnthropicStreamInvalidChunkShape(t *testing.T) {
 
 func TestWave4AnthropicStreamNonMapPartSkipped(t *testing.T) {
 	sse := wave4SSEData(`{"choices":[{"delta":{"content":["plain-string",{"type":"text","text":"real"}]}}]}`) + "data: [DONE]\n\n"
-	w, err, _, _ := wave4RunAnthropicStream(t, sse, 0)
+	w, _, _, err := wave4RunAnthropicStream(t, sse, 0)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -171,7 +171,7 @@ func TestWave4AnthropicStreamNonMapPartSkipped(t *testing.T) {
 func TestWave4AnthropicStreamToolArgsTooLong(t *testing.T) {
 	args := strings.Repeat("x", (1<<20)+1)
 	chunk := `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"f","arguments":` + strconvQuoteWave4(args) + `}}]}}]}`
-	w, err, _, _ := wave4RunAnthropicStream(t, wave4SSEData(chunk), 0)
+	w, _, _, err := wave4RunAnthropicStream(t, wave4SSEData(chunk), 0)
 	if err == nil || !strings.Contains(err.Error(), "exceeds safe limit") {
 		t.Fatalf("err = %v, want the args limit error", err)
 	}
@@ -186,7 +186,7 @@ func TestWave4AnthropicStreamToolArgsTooLong(t *testing.T) {
 // with the fallback name "tool" instead of being dropped silently.
 func TestWave4AnthropicStreamNamelessToolDefaults(t *testing.T) {
 	sse := wave4SSEData(`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{}}]}}]}`) + "data: [DONE]\n\n"
-	w, err, _, _ := wave4RunAnthropicStream(t, sse, 0)
+	w, _, _, err := wave4RunAnthropicStream(t, sse, 0)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -216,7 +216,7 @@ func TestWave4AnthropicStreamFinishReasons(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.reason, func(t *testing.T) {
 			sse := wave4SSEData(`{"choices":[{"finish_reason":"`+tc.reason+`"}]}`) + "data: [DONE]\n\n"
-			w, err, _, _ := wave4RunAnthropicStream(t, sse, 0)
+			w, _, _, err := wave4RunAnthropicStream(t, sse, 0)
 			if err != nil {
 				t.Fatalf("err = %v", err)
 			}
@@ -238,7 +238,7 @@ func TestWave4AnthropicStreamUsageAndCacheRead(t *testing.T) {
 	sse := wave4TextChunk("hi") +
 		wave4SSEData(`{"usage":{"prompt_tokens":10,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":4}}}`) +
 		"data: [DONE]\n\n"
-	w, err, gotPrompt, gotCompletion := wave4RunAnthropicStream(t, sse, 0)
+	w, gotPrompt, gotCompletion, err := wave4RunAnthropicStream(t, sse, 0)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -259,7 +259,7 @@ func TestWave4AnthropicStreamUsageAndCacheRead(t *testing.T) {
 func TestWave4AnthropicStreamWriterFailures(t *testing.T) {
 	// Failing the ping write aborts before any chunk is processed.
 	{
-		w, err, _, _ := wave4RunAnthropicStream(t, wave4TextChunk("hi")+"data: [DONE]\n\n", 2)
+		w, _, _, err := wave4RunAnthropicStream(t, wave4TextChunk("hi")+"data: [DONE]\n\n", 2)
 		if err == nil {
 			t.Fatal("ping write failure must return an error")
 		}
@@ -274,7 +274,7 @@ func TestWave4AnthropicStreamWriterFailures(t *testing.T) {
 	// no-op (writeErr already set) and the function returns that error
 	// at the end without a message_stop.
 	{
-		w, err, _, _ := wave4RunAnthropicStream(t, wave4TextChunk("hi")+"data: [DONE]\n\n", 3)
+		w, _, _, err := wave4RunAnthropicStream(t, wave4TextChunk("hi")+"data: [DONE]\n\n", 3)
 		if err == nil {
 			t.Fatal("block-start write failure must return an error")
 		}
@@ -289,7 +289,7 @@ func TestWave4AnthropicStreamWriterFailures(t *testing.T) {
 	// itself, not the translated stream error.
 	{
 		sse := wave4SSEData(`{"error":{"type":"api_error","message":"boom"}}`)
-		w, err, _, _ := wave4RunAnthropicStream(t, sse, 3)
+		w, _, _, err := wave4RunAnthropicStream(t, sse, 3)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}
@@ -298,7 +298,7 @@ func TestWave4AnthropicStreamWriterFailures(t *testing.T) {
 	// writeErr check, before any finish handling.
 	{
 		chunk := `{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"f"}}]}}]}`
-		w, err, _, _ := wave4RunAnthropicStream(t, wave4SSEData(chunk)+"data: [DONE]\n\n", 3)
+		w, _, _, err := wave4RunAnthropicStream(t, wave4SSEData(chunk)+"data: [DONE]\n\n", 3)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}
@@ -307,7 +307,7 @@ func TestWave4AnthropicStreamWriterFailures(t *testing.T) {
 	// and returns the write error.
 	{
 		sse := wave4TextChunk("hi") + "data: [DONE]\n\n"
-		w, err, _, _ := wave4RunAnthropicStream(t, sse, 6)
+		w, _, _, err := wave4RunAnthropicStream(t, sse, 6)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}

@@ -64,7 +64,8 @@ func TestWave3ReadAndVerifyBundleManifestChecks(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var bundle string
-			if tc.name == "manifest does not parse" {
+			switch tc.name {
+			case "manifest does not parse":
 				bundle = wave3CraftTar(t, []struct {
 					name string
 					size int64
@@ -73,13 +74,13 @@ func TestWave3ReadAndVerifyBundleManifestChecks(t *testing.T) {
 					{backupEntryManifest, 8, []byte("not json")},
 					{backupEntryConfig, int64(len(cfgBytes)), cfgBytes},
 				})
-			} else if tc.name == "no manifest" {
+			case "no manifest":
 				bundle = wave3CraftTar(t, []struct {
 					name string
 					size int64
 					body []byte
 				}{{backupEntryConfig, int64(len(cfgBytes)), cfgBytes}})
-			} else {
+			default:
 				bundle = wave3ManifestTar(t, tc.manifest, tc.payloads)
 			}
 			_, _, _, err := readAndVerifyBundle(bundle)

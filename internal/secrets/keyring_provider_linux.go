@@ -18,11 +18,11 @@ func newKeyringProvider() KeyProvider { return linuxKeyringProvider{} }
 func (linuxKeyringProvider) Load(ctx context.Context, ref string) ([]byte, error) {
 	out, err := exec.CommandContext(ctx, "secret-tool", "lookup", "service", "nexaroute", "account", ref).Output() // #nosec G204 -- literal "secret-tool" executable with fixed arguments; ref is a single argv element taken from operator configuration (NEXAROUTE_KEY_PROVIDER_REF) and no shell is involved.
 	if err != nil {
-		return nil, fmt.Errorf("OS keyring lookup failed: %w", err)
+		return nil, fmt.Errorf("operating-system keyring lookup failed: %w", err)
 	}
 	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
 	if err != nil || len(key) != 32 {
-		return nil, errors.New("OS keyring contains an invalid 32-byte key")
+		return nil, errors.New("operating-system keyring contains an invalid 32-byte key")
 	}
 	return key, nil
 }
@@ -40,7 +40,7 @@ func (linuxKeyringProvider) Store(ctx context.Context, ref string, key []byte) e
 		"NexaRoute master key", "service", "nexaroute", "account", ref)
 	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString(key) + "\n")
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("OS keyring store failed: %w", err)
+		return fmt.Errorf("operating-system keyring store failed: %w", err)
 	} else if len(output) > 0 {
 		_ = output
 	}
