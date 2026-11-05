@@ -16,6 +16,8 @@ data:
   stub.py: |
     import json
     import os
+    import signal
+    import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -57,7 +59,22 @@ data:
             pass
 
 
-    HTTPServer(("0.0.0.0", int(os.environ.get("STUB_PORT", "8080"))), Handler).serve_forever()
+    server = HTTPServer(("0.0.0.0", int(os.environ.get("STUB_PORT", "8080"))), Handler)
+
+
+    def stop_server(_signum, _frame):
+        # Python is PID 1 in this test container; install an explicit handler
+        # rather than relying on PID 1's default signal disposition.
+        # HTTPServer.shutdown must run in a different thread from serve_forever.
+        threading.Thread(target=server.shutdown, daemon=True).start()
+
+
+    signal.signal(signal.SIGTERM, stop_server)
+    signal.signal(signal.SIGINT, stop_server)
+    try:
+        server.serve_forever(poll_interval=0.2)
+    finally:
+        server.server_close()
 ---
 apiVersion: apps/v1
 kind: Deployment
