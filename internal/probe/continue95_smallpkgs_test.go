@@ -52,6 +52,7 @@ func TestContinue95ClassifyAndRecoveryBounds(t *testing.T) {
 }
 
 func TestContinue95StartRecoveryWorkersGuards(t *testing.T) {
+	//lint:ignore SA1012 this test verifies the nil-context guard.
 	(&Engine{}).startRecoveryWorkers(nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

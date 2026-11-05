@@ -42,6 +42,7 @@ func TestIssue663ProvidersClassifyAndDefaults(t *testing.T) {
 // consuming the sync.Once that gates worker startup.
 func TestIssue663ProvidersStartRecoveryWorkersGuards(t *testing.T) {
 	e, _, _, bus := coverageFixture(t, http.StatusOK, `{"id":"c","choices":[{"message":{"role":"assistant","content":"OK"}}]}`, "priority", "m")
+	//lint:ignore SA1012 this test verifies nil context does not consume worker startup.
 	e.startRecoveryWorkers(nil)
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()

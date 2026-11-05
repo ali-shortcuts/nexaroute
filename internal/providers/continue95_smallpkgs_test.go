@@ -24,20 +24,24 @@ func TestContinue95OpencodeKindAndContextBranches(t *testing.T) {
 		t.Errorf("default kind = %q", got)
 	}
 	// Nil-context guards.
+	//lint:ignore SA1012 this test verifies the documented nil-parent fallback.
 	ctx := WithSessionKey(nil, "sess-1")
 	if v, ok := SessionKeyFromContext(ctx); !ok || v != "sess-1" {
 		t.Errorf("session key round-trip = %q, %v", v, ok)
 	}
+	//lint:ignore SA1012 this test verifies nil input reports no session key.
 	if _, ok := SessionKeyFromContext(nil); ok {
 		t.Error("nil context should yield no session key")
 	}
 	if _, ok := SessionKeyFromContext(context.Background()); ok {
 		t.Error("empty context should yield no session key")
 	}
+	//lint:ignore SA1012 this test verifies the documented nil-parent fallback.
 	sctx := WithClientScope(nil, "tenant-1")
 	if v, ok := ClientScopeFromContext(sctx); !ok || v != "tenant-1" {
 		t.Errorf("client scope round-trip = %q, %v", v, ok)
 	}
+	//lint:ignore SA1012 this test verifies nil input reports no client scope.
 	if _, ok := ClientScopeFromContext(nil); ok {
 		t.Error("nil context should yield no client scope")
 	}
