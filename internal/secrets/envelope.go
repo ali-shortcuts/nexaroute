@@ -517,14 +517,14 @@ func ParseTransitCiphertextVersion(s string) (int, error) {
 	}
 	v, err := strconv.Atoi(digits)
 	if err != nil || v < 1 {
-		return 0, errors.New("Transit ciphertext version must be at least 1")
+		return 0, errors.New("transit ciphertext version must be at least 1")
 	}
 	if len(parts[2]) == 0 || len(parts[2]) > 4096 {
-		return 0, errors.New("Transit ciphertext body must be non-empty and at most 4096 bytes")
+		return 0, errors.New("transit ciphertext body must be non-empty and at most 4096 bytes")
 	}
 	raw, err := base64.StdEncoding.DecodeString(parts[2])
 	if err != nil || base64.StdEncoding.EncodeToString(raw) != parts[2] {
-		return 0, errors.New("Transit ciphertext body must be strict standard base64")
+		return 0, errors.New("transit ciphertext body must be strict standard base64")
 	}
 	return v, nil
 }
@@ -889,15 +889,15 @@ func ProveTransitConnectivity(ctx context.Context, env EnvelopeKeyProvider) erro
 	defer clear(dek)
 	wrapped, _, err := env.WrapDEK(ctx, dek)
 	if err != nil {
-		return fmt.Errorf("Transit connectivity check failed on wrap: %w", err)
+		return fmt.Errorf("transit connectivity check failed on wrap: %w", err)
 	}
 	back, _, err := env.UnwrapDEK(ctx, wrapped)
 	if err != nil {
-		return fmt.Errorf("Transit connectivity check failed on unwrap: %w", err)
+		return fmt.Errorf("transit connectivity check failed on unwrap: %w", err)
 	}
 	defer clear(back)
 	if !bytes.Equal(dek, back) {
-		return errors.New("Transit connectivity check failed: canary round-trip mismatch")
+		return errors.New("transit connectivity check failed: canary round-trip mismatch")
 	}
 	return nil
 }
@@ -909,7 +909,7 @@ func ProveTransitConnectivity(ctx context.Context, env EnvelopeKeyProvider) erro
 // availability and would not be a rollback.
 func EncryptedBackupWith(c Cipher, raw []byte) ([]byte, error) {
 	if c.env != nil {
-		return nil, errors.New("Transit mode does not use sealed backups; migration and rewrap write verbatim pre-operation backups")
+		return nil, errors.New("transit mode does not use sealed backups; migration and rewrap write verbatim pre-operation backups")
 	}
 	v, err := c.Seal([]byte("nexaroute-backup-v1"), raw)
 	if err != nil {
@@ -921,7 +921,7 @@ func EncryptedBackupWith(c Cipher, raw []byte) ([]byte, error) {
 // DecryptBackupWith opens a backup written by EncryptedBackupWith.
 func DecryptBackupWith(c Cipher, raw []byte) ([]byte, error) {
 	if c.env != nil {
-		return nil, errors.New("Transit mode does not use sealed backups; migration and rewrap write verbatim pre-operation backups")
+		return nil, errors.New("transit mode does not use sealed backups; migration and rewrap write verbatim pre-operation backups")
 	}
 	return c.Open([]byte("nexaroute-backup-v1"), strings.TrimSpace(string(raw)))
 }
