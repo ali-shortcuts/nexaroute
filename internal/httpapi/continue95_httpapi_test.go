@@ -1414,7 +1414,6 @@ func (w *Continue95HttpapiErrorWriter) Write([]byte) (int, error) {
 }
 func (w *Continue95HttpapiErrorWriter) WriteHeader(int) {}
 
-
 func TestContinue95HttpapiCompatDirect(t *testing.T) {
 	srv := Continue95HttpapiGeminiGateway(t, []*Continue95HttpapiFakeUpstream{{}}, 1)
 	// dialectFor with an unknown provider falls back to DetectDialect,
