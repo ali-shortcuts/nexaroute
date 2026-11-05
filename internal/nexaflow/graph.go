@@ -106,7 +106,3 @@ func triggerConfig(def Definition, node DefinitionNode, spec *NodeSpec) map[stri
 	}
 	return deepCopyMap(node.Config)
 }
-
-// SortedNodeIDs returns definition node ids in topological order; it is
-// a convenience for inspectors and tests.
-func SortedNodeIDs(def Definition) []string { return TopologicalOrder(def) }

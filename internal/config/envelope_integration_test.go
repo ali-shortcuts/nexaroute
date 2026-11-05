@@ -34,12 +34,6 @@ type fakeTransitEntry struct {
 	version int
 }
 
-func (f *fakeTransit) rotate() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.currentVersion++
-}
-
 func (f *fakeTransit) handler(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

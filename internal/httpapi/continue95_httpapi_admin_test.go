@@ -1013,6 +1013,7 @@ func TestContinue95HttpapiOidcDirect(t *testing.T) {
 	// Nil ctx falls back to Background, then discovery fails (loopback
 	// port 1 refuses immediately).
 	t.Setenv("CONTINUE95_OIDC_SECRET_SET", "x")
+	//lint:ignore SA1012 This test intentionally verifies the documented nil-context fallback.
 	if _, err := newOIDCAuthenticator(nil, config.OIDCConfig{
 		IssuerURL: "http://127.0.0.1:1/", ClientID: "c",
 		ClientSecretEnv: "CONTINUE95_OIDC_SECRET_SET",

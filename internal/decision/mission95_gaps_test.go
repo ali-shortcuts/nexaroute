@@ -375,7 +375,7 @@ func TestMission95ValidateAndNormalizeEdges(t *testing.T) {
 	if !applied || r != ReasonNormalizationApplied || ordered[1].ID != "a" {
 		t.Fatalf("rank partial: %v %v %v", ordered, applied, r)
 	}
-	ordered, _, r = NormalizeResult(elig, DecisionResult{Action: ActionRank, RankedIDs: []string{"a", "b"}})
+	_, _, r = NormalizeResult(elig, DecisionResult{Action: ActionRank, RankedIDs: []string{"a", "b"}})
 	if r != ReasonEligibleSetPreserved {
 		t.Fatalf("rank full: %v", r)
 	}

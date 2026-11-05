@@ -11,7 +11,6 @@ import (
 func f64p(v float64) *float64 { return &v }
 func i64p(v int64) *int64     { return &v }
 func boolp(v bool) *bool      { return &v }
-func strp(v string) *string   { return &v }
 
 func TestMission95OpenAIChatDecode(t *testing.T) {
 	// Seed + penalties populate metadata; max_completion wins only
