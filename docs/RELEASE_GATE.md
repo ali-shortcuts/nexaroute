@@ -83,10 +83,10 @@ candidate (`--rc`):
 
 The owner selected completion rather than exclusion for v0.25.0. For this exact
 version the completion gate rejects any nonempty or malformed exclusion
-manifest, including signed entries; the retained unsigned historical proposal
-therefore blocks the gate until removed or made empty by reviewed release
-preparation. Do that before selecting the final candidate SHA and collecting
-its evidence: modifying the manifest later changes the commit and makes earlier
+manifest, including signed entries. The unsigned historical proposal was
+replaced by an empty manifest in reviewed release preparation. Any later change
+to the manifest must also happen before selecting the final candidate SHA and
+collecting its evidence: modifying the manifest later changes the commit and makes earlier
 exact-SHA evidence stale. All #646–#654 must be closed with `state_reason=completed`; #654 must have a
 GitHub closure timestamp strictly later than every individual issue. The
 generic version-scoped exclusion mechanism below is preserved for future

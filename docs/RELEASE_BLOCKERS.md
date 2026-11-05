@@ -177,9 +177,10 @@ The owner selected **complete every required scope** for v0.25.0. No signed or
 unsigned exclusion may waive an open, `not_planned` or otherwise incomplete
 blocker. The generic version-scoped exclusion mechanism from #822 remains in
 place for other releases; it is not authorization to use exclusions here.
-The historical v0.25.0 manifest remains unsigned and non-empty, so the strict
-gate rejects it. An owner-reviewed release preparation must remove it or make
-its `exclusions` array empty; that alone never supplies acceptance evidence.
+The v0.25.0 manifest (`docs/releases/v0.25.0-exclusions.json`) is now empty, so
+the strict gate's manifest check passes; the earlier unsigned proposal survives
+only in git history. An empty manifest never supplies acceptance evidence, and
+any later non-empty or malformed manifest makes the gate refuse again.
 
 Run each real authorized acceptance and attach sanitized evidence, then close
 #646–#653 as completed only after independent review; close #654 last. Record
