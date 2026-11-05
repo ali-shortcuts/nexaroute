@@ -1717,7 +1717,7 @@ func TestContinue95SecretsKeyringStoreFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	if err := (linuxKeyringProvider{}.Store(context.Background(), "synth-ref", Continue95SecretsSyntheticKey(0x50))); err == nil || !strings.Contains(err.Error(), "OS keyring store failed") {
+	if err := (linuxKeyringProvider{}.Store(context.Background(), "synth-ref", Continue95SecretsSyntheticKey(0x50))); err == nil || !strings.Contains(err.Error(), "operating-system keyring store failed") {
 		t.Fatalf("keyring store failure err=%v", err)
 	}
 }
