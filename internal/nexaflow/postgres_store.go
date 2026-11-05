@@ -668,14 +668,18 @@ func (s *PostgresStore) Prune(ctx context.Context, before time.Time) (int, error
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
+			// The scan failure is the primary error on this path; release the
+			// cursor before returning so the transaction can roll back promptly.
+			_ = rows.Close()
 			return 0, err
 		}
 		ids = append(ids, id)
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
 		return 0, err
 	}
 	if len(ids) == 0 {
