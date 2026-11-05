@@ -2057,10 +2057,10 @@ func TestContinue95GatewaySecretsCLIErrorMatrix(t *testing.T) {
 
 	// Migrate ConfiguredEnvelope error: unparseable Vault address.
 	Continue95GatewaySetTransitEnv(t, "://bad")
-	if err := runSecrets([]string{"migrate-to-transit", "--config", migPath}); err == nil || !strings.Contains(err.Error(), "Transit") {
+	if err := runSecrets([]string{"migrate-to-transit", "--config", migPath}); err == nil || !strings.Contains(err.Error(), "vault transit address") {
 		t.Fatalf("migrate bad vault addr err=%v", err)
 	}
-	if err := runSecrets([]string{"rewrap-transit", "--config", migPath}); err == nil || !strings.Contains(err.Error(), "Transit") {
+	if err := runSecrets([]string{"rewrap-transit", "--config", migPath}); err == nil || !strings.Contains(err.Error(), "vault transit address") {
 		t.Fatalf("rewrap bad vault addr err=%v", err)
 	}
 

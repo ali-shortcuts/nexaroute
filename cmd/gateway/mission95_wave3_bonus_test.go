@@ -183,20 +183,20 @@ func TestWave3FetchOIDCJWKSLoopbackForms(t *testing.T) {
 		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 		defer srv.Close()
 		_, err := fetchOIDCJWKS(context.Background(), srv.URL+"/jwks", time.Second)
-		if err == nil || !strings.Contains(err.Error(), "JWKS request failed") {
-			t.Fatalf("err=%v, want 'JWKS request failed'", err)
+		if err == nil || !strings.Contains(err.Error(), "jwks request failed") {
+			t.Fatalf("err=%v, want 'jwks request failed'", err)
 		}
 	})
 	t.Run("localhost passes validation", func(t *testing.T) {
 		_, err := fetchOIDCJWKS(context.Background(), "http://localhost:1/jwks", time.Second)
-		if err == nil || !strings.Contains(err.Error(), "JWKS request failed") {
-			t.Fatalf("err=%v, want 'JWKS request failed'", err)
+		if err == nil || !strings.Contains(err.Error(), "jwks request failed") {
+			t.Fatalf("err=%v, want 'jwks request failed'", err)
 		}
 	})
 	t.Run("ipv6 loopback passes validation", func(t *testing.T) {
 		_, err := fetchOIDCJWKS(context.Background(), "http://[::1]:1/jwks", time.Second)
-		if err == nil || !strings.Contains(err.Error(), "JWKS request failed") {
-			t.Fatalf("err=%v, want 'JWKS request failed'", err)
+		if err == nil || !strings.Contains(err.Error(), "jwks request failed") {
+			t.Fatalf("err=%v, want 'jwks request failed'", err)
 		}
 	})
 }

@@ -484,8 +484,8 @@ func TestWave3FetchOIDCJWKS(t *testing.T) {
 		url := srv.URL + "/jwks"
 		srv.Close()
 		_, err := fetchOIDCJWKS(context.Background(), url, time.Second)
-		if err == nil || !strings.Contains(err.Error(), "JWKS request failed") {
-			t.Fatalf("err=%v, want 'JWKS request failed'", err)
+		if err == nil || !strings.Contains(err.Error(), "jwks request failed") {
+			t.Fatalf("err=%v, want 'jwks request failed'", err)
 		}
 	})
 	t.Run("truncated body fails", func(t *testing.T) {
