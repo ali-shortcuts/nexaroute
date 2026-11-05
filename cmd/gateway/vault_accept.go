@@ -379,7 +379,7 @@ func vaultAcceptHelperTimeout(timeout time.Duration, timeoutSet bool) (int64, er
 	}
 	seconds, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || seconds <= 0 {
-		return 0, fmt.Errorf("VAULT_HELPER_TIMEOUT must be a positive integer (seconds), got %q", raw)
+		return 0, fmt.Errorf("environment variable VAULT_HELPER_TIMEOUT must be a positive integer (seconds), got %q", raw)
 	}
 	return seconds, nil
 }

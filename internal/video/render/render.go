@@ -408,14 +408,14 @@ func (r *Renderer) ValidateOutput(ctx context.Context, plan video.Plan, path str
 		return err
 	}
 	if info.Codec != "h264" {
-		return fmt.Errorf("QC: output codec is %q, want h264", info.Codec)
+		return fmt.Errorf("quality check: output codec is %q, want h264", info.Codec)
 	}
 	if info.Width != plan.Width || info.Height != plan.Height {
-		return fmt.Errorf("QC: output dimensions %dx%d do not match plan %dx%d", info.Width, info.Height, plan.Width, plan.Height)
+		return fmt.Errorf("quality check: output dimensions %dx%d do not match plan %dx%d", info.Width, info.Height, plan.Width, plan.Height)
 	}
 	want := plan.TotalDuration()
 	if math.Abs(info.Seconds-want) > math.Max(1.0, want*0.15) {
-		return fmt.Errorf("QC: output duration %.2fs does not match plan total %.2fs", info.Seconds, want)
+		return fmt.Errorf("quality check: output duration %.2fs does not match plan total %.2fs", info.Seconds, want)
 	}
 	// Blank-frame check on the joined output at each scene midpoint.
 	at := 0.0
@@ -423,10 +423,10 @@ func (r *Renderer) ValidateOutput(ctx context.Context, plan video.Plan, path str
 		mid := at + scene.DurationSeconds/2
 		_, variance, err := r.FrameStats(ctx, path, mid)
 		if err != nil {
-			return fmt.Errorf("QC: %w", err)
+			return fmt.Errorf("quality check: %w", err)
 		}
 		if variance < 1.0 {
-			return fmt.Errorf("QC: scene %q frame at %.2fs is blank (luminance variance %.3f)", scene.ID, mid, variance)
+			return fmt.Errorf("quality check: scene %q frame at %.2fs is blank (luminance variance %.3f)", scene.ID, mid, variance)
 		}
 		at += scene.DurationSeconds
 	}

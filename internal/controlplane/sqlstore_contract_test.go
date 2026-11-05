@@ -64,7 +64,7 @@ func openScriptedDB(t *testing.T, state *scriptedSQL) *sql.DB {
 
 func (d scriptedDriver) Open(string) (driver.Conn, error) { return scriptedConn(d), nil }
 func (c scriptedConn) Prepare(string) (driver.Stmt, error) {
-	return nil, errors.New("Prepare is not used")
+	return nil, errors.New("prepare is not used")
 }
 func (c scriptedConn) Close() error              { return nil }
 func (c scriptedConn) Begin() (driver.Tx, error) { return scriptedTx(c), nil }

@@ -41,7 +41,7 @@ func parseSoakDuration(raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid NEXAROUTE_SOAK_DURATION %q: %w", raw, err)
 	}
 	if d < 0 {
-		return 0, fmt.Errorf("NEXAROUTE_SOAK_DURATION must not be negative, got %q", raw)
+		return 0, fmt.Errorf("environment variable NEXAROUTE_SOAK_DURATION must not be negative, got %q", raw)
 	}
 	// A zero duration (0s, 0m, ...) keeps the fixed-iteration soak shape; the
 	// soak script documents "0s disables" the sustained phase.

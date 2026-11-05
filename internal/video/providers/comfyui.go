@@ -99,7 +99,7 @@ func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 		host := u.Hostname()
 		ip := net.ParseIP(host)
 		if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
-			return nil, errors.New("ComfyUI over plain HTTP is only allowed on loopback; use HTTPS for remote endpoints")
+			return nil, errors.New("comfyui over plain HTTP is only allowed on loopback; use HTTPS for remote endpoints")
 		}
 	}
 	workflowPath := strings.TrimSpace(cfg.ComfyUIWorkflowPath)
@@ -111,11 +111,11 @@ func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 		return nil, fmt.Errorf("read ComfyUI API workflow: %w", err)
 	}
 	if len(data) == 0 || len(data) > comfyMaxWorkflowBytes {
-		return nil, fmt.Errorf("ComfyUI workflow must be between 1 byte and %d bytes", comfyMaxWorkflowBytes)
+		return nil, fmt.Errorf("comfyui workflow must be between 1 byte and %d bytes", comfyMaxWorkflowBytes)
 	}
 	var workflow map[string]map[string]any
 	if err := json.Unmarshal(data, &workflow); err != nil || len(workflow) == 0 {
-		return nil, errors.New("ComfyUI workflow must be a non-empty API-format JSON object")
+		return nil, errors.New("comfyui workflow must be a non-empty API-format JSON object")
 	}
 	model := strings.TrimSpace(cfg.ComfyUIModel)
 	if model == "" {
@@ -144,7 +144,7 @@ func NewComfyUI(cfg video.Config, maxOutputBytes int64) (*ComfyUI, error) {
 		AllowLoopback: true,
 	}.NewTransport(base, "")
 	if err != nil {
-		return nil, fmt.Errorf("ComfyUI egress policy: %w", err)
+		return nil, fmt.Errorf("comfyui egress policy: %w", err)
 	}
 	p := &ComfyUI{
 		baseURL:        base,
@@ -201,14 +201,14 @@ func defaultInput(value, fallback string) string {
 func (p *ComfyUI) validateInput(nodeID, input, label string) error {
 	node, ok := p.workflow[strings.TrimSpace(nodeID)]
 	if !ok {
-		return fmt.Errorf("ComfyUI workflow has no configured %s node %q", label, nodeID)
+		return fmt.Errorf("comfyui workflow has no configured %s node %q", label, nodeID)
 	}
 	inputs, ok := node["inputs"].(map[string]any)
 	if !ok {
-		return fmt.Errorf("ComfyUI workflow node %q has no inputs object", nodeID)
+		return fmt.Errorf("comfyui workflow node %q has no inputs object", nodeID)
 	}
 	if _, ok := inputs[input]; !ok {
-		return fmt.Errorf("ComfyUI workflow node %q has no input %q for %s", nodeID, input, label)
+		return fmt.Errorf("comfyui workflow node %q has no input %q for %s", nodeID, input, label)
 	}
 	return nil
 }
@@ -258,38 +258,38 @@ func (p *ComfyUI) ValidateRequest(r video.VideoRequest) error {
 		return err
 	}
 	if r.Mode != video.ModeTextToVideo {
-		return errors.New("ComfyUI workflow adapter currently supports text_to_video only")
+		return errors.New("comfyui workflow adapter currently supports text_to_video only")
 	}
 	if r.DurationSeconds > p.maxDuration {
 		return fmt.Errorf("requested duration %.2fs exceeds configured ComfyUI maximum %.2fs", r.DurationSeconds, p.maxDuration)
 	}
 	if r.ModelPreference != "" && r.ModelPreference != p.model {
-		return fmt.Errorf("ComfyUI workflow model must be %q", p.model)
+		return fmt.Errorf("comfyui workflow model must be %q", p.model)
 	}
 	if r.AudioRequested || r.DialogueRequested || strings.TrimSpace(r.NarrationText) != "" || strings.TrimSpace(r.SubtitleLanguage) != "" {
-		return errors.New("ComfyUI workflow adapter does not claim audio, narration, or subtitle support")
+		return errors.New("comfyui workflow adapter does not claim audio, narration, or subtitle support")
 	}
 	if len(r.SoundRequirements) > 0 {
-		return errors.New("ComfyUI workflow adapter does not generate music or sound effects")
+		return errors.New("comfyui workflow adapter does not generate music or sound effects")
 	}
 	if len(r.ShotPlan) > 1 {
-		return errors.New("ComfyUI adapter submits one workflow per job; multi-shot episode orchestration is not implemented")
+		return errors.New("comfyui adapter submits one workflow per job; multi-shot episode orchestration is not implemented")
 	}
 	if strings.TrimSpace(r.Prompt) == "" && (len(r.ShotPlan) != 1 || strings.TrimSpace(r.ShotPlan[0].Prompt) == "") {
-		return errors.New("ComfyUI requires a non-empty text prompt")
+		return errors.New("comfyui requires a non-empty text prompt")
 	}
 	if len(r.ReferenceAssets) > 0 || r.FirstFrameAsset != nil || r.LastFrameAsset != nil ||
 		len(r.CharacterReferences) > 0 || len(r.LocationReferences) > 0 || len(r.StyleReferences) > 0 {
-		return errors.New("ComfyUI workflow adapter does not map reference or first/last-frame assets into the workflow")
+		return errors.New("comfyui workflow adapter does not map reference or first/last-frame assets into the workflow")
 	}
 	if r.ContinuityContext != nil {
-		return errors.New("ComfyUI workflow adapter does not map continuity context into the workflow")
+		return errors.New("comfyui workflow adapter does not map continuity context into the workflow")
 	}
 	if strings.TrimSpace(r.CallbackURL) != "" {
-		return errors.New("ComfyUI provider does not support callbacks or webhooks")
+		return errors.New("comfyui provider does not support callbacks or webhooks")
 	}
 	if strings.ToLower(strings.TrimSpace(r.OutputFormat)) != "mp4" {
-		return errors.New("ComfyUI workflow adapter currently supports MP4 output only")
+		return errors.New("comfyui workflow adapter currently supports MP4 output only")
 	}
 	negativePrompt := strings.TrimSpace(r.NegativePrompt)
 	if negativePrompt == "" && len(r.ShotPlan) == 1 {
@@ -309,7 +309,7 @@ func (p *ComfyUI) ValidateRequest(r video.VideoRequest) error {
 	}
 	width, height := outputDimensions(r)
 	if width < 64 || height < 64 || width > 4096 || height > 4096 {
-		return errors.New("ComfyUI output dimensions must be between 64 and 4096 pixels")
+		return errors.New("comfyui output dimensions must be between 64 and 4096 pixels")
 	}
 	return nil
 }
@@ -391,7 +391,7 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 		return video.ProviderJob{}, fmt.Errorf("submit ComfyUI workflow: %w", err)
 	}
 	if strings.TrimSpace(response.PromptID) == "" {
-		return video.ProviderJob{}, errors.New("ComfyUI did not return a prompt_id; inspect the workflow and node validation errors")
+		return video.ProviderJob{}, errors.New("comfyui did not return a prompt_id; inspect the workflow and node validation errors")
 	}
 	// A 200 that still carries node_errors is a rejected workflow, not
 	// an accepted job: ComfyUI reports node validation in node_errors,
@@ -402,7 +402,7 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 		// Deliberately not echoing the node_errors payload: it may
 		// embed workflow input values, and the operator can inspect
 		// them on the ComfyUI server itself.
-		return video.ProviderJob{}, errors.New("ComfyUI reported node errors for the submitted workflow; the job was not accepted")
+		return video.ProviderJob{}, errors.New("comfyui reported node errors for the submitted workflow; the job was not accepted")
 	}
 	return video.ProviderJob{ProviderJobID: response.PromptID, Provider: p.ID(), Model: p.model, Accepted: true}, nil
 }
@@ -424,14 +424,14 @@ func outputDimensions(r video.VideoRequest) (int, int) {
 func setWorkflowInput(workflow map[string]map[string]any, nodeID, input string, value any) error {
 	node, ok := workflow[strings.TrimSpace(nodeID)]
 	if !ok {
-		return fmt.Errorf("ComfyUI workflow node %q disappeared while preparing request", nodeID)
+		return fmt.Errorf("comfyui workflow node %q disappeared while preparing request", nodeID)
 	}
 	inputs, ok := node["inputs"].(map[string]any)
 	if !ok {
-		return fmt.Errorf("ComfyUI workflow node %q has no inputs object", nodeID)
+		return fmt.Errorf("comfyui workflow node %q has no inputs object", nodeID)
 	}
 	if _, ok := inputs[input]; !ok {
-		return fmt.Errorf("ComfyUI workflow node %q has no input %q", nodeID, input)
+		return fmt.Errorf("comfyui workflow node %q has no input %q", nodeID, input)
 	}
 	inputs[input] = value
 	workflow[nodeID] = node
@@ -440,7 +440,7 @@ func setWorkflowInput(workflow map[string]map[string]any, nodeID, input string, 
 
 func (p *ComfyUI) GetJob(ctx context.Context, id string) (video.ProviderJobStatus, error) {
 	if strings.TrimSpace(id) == "" {
-		return video.ProviderJobStatus{}, errors.New("ComfyUI prompt ID is required")
+		return video.ProviderJobStatus{}, errors.New("comfyui prompt ID is required")
 	}
 	var history map[string]comfyHistoryEntry
 	if err := p.doJSON(ctx, http.MethodGet, "/history/"+url.PathEscape(id), nil, &history); err == nil {
@@ -468,7 +468,7 @@ func (p *ComfyUI) GetJob(ctx context.Context, id string) (video.ProviderJobStatu
 	if queueContains(queueState.Pending, id) {
 		return video.ProviderJobStatus{ProviderJobID: id, State: video.StateQueued}, nil
 	}
-	return video.ProviderJobStatus{}, errors.New("ComfyUI prompt is absent from history and queue")
+	return video.ProviderJobStatus{}, errors.New("comfyui prompt is absent from history and queue")
 }
 
 func queueContains(items [][]json.RawMessage, id string) bool {
@@ -518,10 +518,10 @@ func (p *ComfyUI) CancelJob(ctx context.Context, id string) error {
 		return fmt.Errorf("read ComfyUI queue before cancellation: %w", err)
 	}
 	if queueContains(queueState.Running, id) {
-		return errors.New("ComfyUI cannot cancel one running prompt without interrupting unrelated work; refusing global interrupt")
+		return errors.New("comfyui cannot cancel one running prompt without interrupting unrelated work; refusing global interrupt")
 	}
 	if !queueContains(queueState.Pending, id) {
-		return errors.New("ComfyUI prompt is not pending; refusing to mark remote work cancelled")
+		return errors.New("comfyui prompt is not pending; refusing to mark remote work cancelled")
 	}
 	return p.doJSON(ctx, http.MethodPost, "/queue", map[string]any{"delete": []string{id}}, nil)
 }
@@ -559,7 +559,7 @@ func (p *ComfyUI) downloadComfyOutputs(ctx context.Context, status video.Provide
 		return nil, errors.New("video asset sink is not configured")
 	}
 	if len(status.Outputs) == 0 {
-		return nil, errors.New("ComfyUI completion has no video output assets")
+		return nil, errors.New("comfyui completion has no video output assets")
 	}
 	// Two outputs that land on the same stored filename would silently
 	// overwrite each other in the asset store (the sink keys by
@@ -582,7 +582,7 @@ func (p *ComfyUI) downloadComfyOutputs(ctx context.Context, status video.Provide
 		name := storage.StoredName(asset.Filename)
 		folded := strings.ToLower(name)
 		if _, dup := seenNames[folded]; dup {
-			return nil, fmt.Errorf("ComfyUI completion lists duplicate video output filename %q; refusing to overwrite a stored asset", name)
+			return nil, fmt.Errorf("comfyui completion lists duplicate video output filename %q; refusing to overwrite a stored asset", name)
 		}
 		seenNames[folded] = struct{}{}
 	}
@@ -610,13 +610,13 @@ func (p *ComfyUI) downloadComfyOutputs(ctx context.Context, status video.Provide
 			return result, fmt.Errorf("close ComfyUI output response: %w", closeErr)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return result, fmt.Errorf("ComfyUI output download returned HTTP %d", resp.StatusCode)
+			return result, fmt.Errorf("comfyui output download returned HTTP %d", resp.StatusCode)
 		}
 		if int64(len(data)) > p.maxOutputBytes {
-			return result, fmt.Errorf("ComfyUI output exceeds configured asset limit of %d bytes", p.maxOutputBytes)
+			return result, fmt.Errorf("comfyui output exceeds configured asset limit of %d bytes", p.maxOutputBytes)
 		}
 		if len(data) == 0 {
-			return result, errors.New("ComfyUI returned an empty video output")
+			return result, errors.New("comfyui returned an empty video output")
 		}
 		asset.ContentType = resp.Header.Get("Content-Type")
 		if strings.Contains(asset.ContentType, ";") {
@@ -630,7 +630,7 @@ func (p *ComfyUI) downloadComfyOutputs(ctx context.Context, status video.Provide
 			}
 		}
 		if !strings.HasPrefix(strings.ToLower(asset.ContentType), "video/") && asset.ContentType != "application/octet-stream" {
-			return result, fmt.Errorf("ComfyUI output has non-video content type %q", asset.ContentType)
+			return result, fmt.Errorf("comfyui output has non-video content type %q", asset.ContentType)
 		}
 		saved, err := sink.Put(ctx, asset, data)
 		if err != nil {
@@ -642,13 +642,13 @@ func (p *ComfyUI) downloadComfyOutputs(ctx context.Context, status video.Provide
 }
 
 func (p *ComfyUI) RegisterWebhook(context.Context, video.WebhookRegistration) error {
-	return errors.New("ComfyUI provider does not support webhooks")
+	return errors.New("comfyui provider does not support webhooks")
 }
 func (p *ComfyUI) VerifyWebhook(*http.Request) error {
-	return errors.New("ComfyUI provider does not support webhooks")
+	return errors.New("comfyui provider does not support webhooks")
 }
 func (p *ComfyUI) ParseWebhook(*http.Request) (video.ProviderJobStatus, error) {
-	return video.ProviderJobStatus{}, errors.New("ComfyUI provider does not support webhooks")
+	return video.ProviderJobStatus{}, errors.New("comfyui provider does not support webhooks")
 }
 
 func (p *ComfyUI) doJSON(ctx context.Context, method, path string, payload, out any) error {
@@ -678,10 +678,10 @@ func (p *ComfyUI) doJSON(ctx context.Context, method, path string, payload, out 
 		return err
 	}
 	if len(data) > comfyMaxResponseBytes {
-		return fmt.Errorf("ComfyUI response exceeds %d bytes", comfyMaxResponseBytes)
+		return fmt.Errorf("comfyui response exceeds %d bytes", comfyMaxResponseBytes)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("ComfyUI API returned HTTP %d", resp.StatusCode)
+		return fmt.Errorf("comfyui API returned HTTP %d", resp.StatusCode)
 	}
 	if out == nil || len(data) == 0 {
 		return nil

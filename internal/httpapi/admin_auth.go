@@ -82,7 +82,7 @@ func (s *Server) authenticateAdmin(r *http.Request) (authz.Identity, string, boo
 		// A broken or unavailable provider never downgrades to a legacy key or
 		// loopback trust. Existing sessions are also rejected if discovery failed.
 		if s.oidc == nil || s.oidcErr != nil {
-			return authz.Identity{}, "oidc-session", false, errors.New("OIDC authentication unavailable")
+			return authz.Identity{}, "oidc-session", false, errors.New("oidc authentication unavailable")
 		}
 		// Emergency/static-key access is unavailable while OIDC is enabled
 		// (docs/SECURITY.md), even when the provider is healthy and the

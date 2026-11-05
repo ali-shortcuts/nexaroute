@@ -64,7 +64,7 @@ func newOIDCAuthenticator(ctx context.Context, cfg config.OIDCConfig) (*oidcAuth
 	}
 	secret := strings.TrimSpace(os.Getenv(cfg.ClientSecretEnv))
 	if secret == "" {
-		return nil, fmt.Errorf("OIDC client secret environment variable %s is unset", cfg.ClientSecretEnv)
+		return nil, fmt.Errorf("oidc client secret environment variable %s is unset", cfg.ClientSecretEnv)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -74,10 +74,10 @@ func newOIDCAuthenticator(ctx context.Context, cfg config.OIDCConfig) (*oidcAuth
 	discoveryCtx = oidc.ClientContext(discoveryCtx, &http.Client{Timeout: 10 * time.Second})
 	provider, err := oidc.NewProvider(discoveryCtx, cfg.IssuerURL)
 	if err != nil {
-		return nil, fmt.Errorf("OIDC provider discovery failed")
+		return nil, fmt.Errorf("oidc provider discovery failed")
 	}
 	if err := validateOIDCDiscovery(provider, cfg.IssuerURL); err != nil {
-		return nil, fmt.Errorf("OIDC provider discovery metadata is invalid: %w", err)
+		return nil, fmt.Errorf("oidc provider discovery metadata is invalid: %w", err)
 	}
 	roles := make(map[string]authz.Role, len(cfg.RoleMappings))
 	for claimValue, roleValue := range cfg.RoleMappings {
@@ -90,7 +90,7 @@ func newOIDCAuthenticator(ctx context.Context, cfg config.OIDCConfig) (*oidcAuth
 		JWKS string `json:"jwks_uri"`
 	}
 	if err := provider.Claims(&discoveryMeta); err != nil {
-		return nil, fmt.Errorf("OIDC provider discovery metadata is invalid: %w", err)
+		return nil, fmt.Errorf("oidc provider discovery metadata is invalid: %w", err)
 	}
 	secretDigest := sha256.Sum256([]byte(secret))
 	policyData, _ := json.Marshal(struct {
@@ -276,28 +276,28 @@ func (a *oidcAuthenticator) Complete(ctx context.Context, transaction pendingOID
 	defer cancel()
 	token, err := a.oauth.Exchange(ctx, code, oauth2.VerifierOption(transaction.verifier))
 	if err != nil {
-		return authz.Identity{}, "", errors.New("OIDC token exchange failed")
+		return authz.Identity{}, "", errors.New("oidc token exchange failed")
 	}
 	rawIDToken, ok := token.Extra("id_token").(string)
 	if !ok || rawIDToken == "" || len(rawIDToken) > 64<<10 {
-		return authz.Identity{}, "", errors.New("OIDC response did not contain a valid ID token")
+		return authz.Identity{}, "", errors.New("oidc response did not contain a valid ID token")
 	}
 	idToken, err := a.verifier.Verify(ctx, rawIDToken)
 	if err != nil {
-		return authz.Identity{}, "", errors.New("OIDC ID token verification failed")
+		return authz.Identity{}, "", errors.New("oidc ID token verification failed")
 	}
 	if !containsAudience(idToken.Audience, a.audience) {
-		return authz.Identity{}, "", errors.New("OIDC ID token audience is invalid")
+		return authz.Identity{}, "", errors.New("oidc ID token audience is invalid")
 	}
 	if idToken.Issuer != a.issuer || idToken.Subject == "" || len(idToken.Subject) > 256 || strings.ContainsAny(idToken.Subject, "\r\n\x00") {
-		return authz.Identity{}, "", errors.New("OIDC ID token identity claims are invalid")
+		return authz.Identity{}, "", errors.New("oidc ID token identity claims are invalid")
 	}
 	if idToken.Nonce == "" || len(idToken.Nonce) != len(transaction.nonce) || subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(transaction.nonce)) != 1 {
-		return authz.Identity{}, "", errors.New("OIDC nonce validation failed")
+		return authz.Identity{}, "", errors.New("oidc nonce validation failed")
 	}
 	var claims map[string]json.RawMessage
 	if err := idToken.Claims(&claims); err != nil {
-		return authz.Identity{}, "", errors.New("OIDC ID token claims are malformed")
+		return authz.Identity{}, "", errors.New("oidc ID token claims are malformed")
 	}
 	// Authorized party: go-oidc checks audience membership but not
 	// azp, so a token minted for another client that merely lists
@@ -307,12 +307,12 @@ func (a *oidcAuthenticator) Complete(ctx context.Context, transaction pendingOID
 	if rawAzp, present := claims["azp"]; present {
 		var azp string
 		if err := json.Unmarshal(rawAzp, &azp); err != nil || azp != a.oauth.ClientID {
-			return authz.Identity{}, "", errors.New("OIDC ID token authorized party is invalid")
+			return authz.Identity{}, "", errors.New("oidc ID token authorized party is invalid")
 		}
 	}
 	values, err := claimStringValues(claims[a.roleClaim])
 	if err != nil {
-		return authz.Identity{}, "", errors.New("OIDC role claim has an invalid type")
+		return authz.Identity{}, "", errors.New("oidc role claim has an invalid type")
 	}
 	roles := make(map[authz.Role]struct{})
 	for _, value := range values {
@@ -321,10 +321,10 @@ func (a *oidcAuthenticator) Complete(ctx context.Context, transaction pendingOID
 		}
 	}
 	if len(roles) == 0 {
-		return authz.Identity{}, "", errors.New("OIDC identity has no allowlisted role")
+		return authz.Identity{}, "", errors.New("oidc identity has no allowlisted role")
 	}
 	if len(roles) != 1 {
-		return authz.Identity{}, "", errors.New("OIDC identity has conflicting allowlisted roles")
+		return authz.Identity{}, "", errors.New("oidc identity has conflicting allowlisted roles")
 	}
 	var role authz.Role
 	for value := range roles {
