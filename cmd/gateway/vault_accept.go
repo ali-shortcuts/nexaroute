@@ -1102,7 +1102,7 @@ func vaultHTTP(ctx context.Context, client *http.Client, addr, token, method, pa
 		return 0, nil, errors.New("cannot read Vault response")
 	}
 	if len(raw) > vaultAcceptMaxBody {
-		return resp.StatusCode, nil, errors.New("Vault response exceeded the size bound")
+		return resp.StatusCode, nil, errors.New("vault response exceeded the size bound")
 	}
 	return resp.StatusCode, raw, nil
 }
