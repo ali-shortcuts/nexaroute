@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -416,8 +417,11 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 // backups: an explicit --admin-url wins, otherwise the config listen
 // address (the admin API shares the gateway listener). A bare ":port"
 // listen binds all interfaces, so loopback is used for the client.
-// Anything that is not a host:port (a socket path, a URL with a path)
-// is refused rather than guessed at.
+// A wildcard listen ("0.0.0.0:port", "[::]:port") binds all interfaces
+// too, so it is mapped to loopback as well: the server's keyless
+// emergency rule only allows loopback hosts, and a request to
+// 0.0.0.0 is rejected with HTTP 401. Anything that is not a host:port
+// (a socket path, a URL with a path) is refused rather than guessed at.
 func resolveLiveAdminURL(flagURL, listen string) (string, error) {
 	if strings.TrimSpace(flagURL) != "" {
 		return strings.TrimRight(strings.TrimSpace(flagURL), "/"), nil
@@ -431,6 +435,11 @@ func resolveLiveAdminURL(flagURL, listen string) (string, error) {
 	}
 	if strings.Contains(listen, "/") {
 		return "", fmt.Errorf("live backup cannot derive an admin URL from listen address %q; pass --admin-url", listen)
+	}
+	if host, port, err := net.SplitHostPort(listen); err == nil {
+		if host == "" || host == "0.0.0.0" || host == "::" {
+			return "http://127.0.0.1:" + port, nil
+		}
 	}
 	host := listen
 	if strings.HasPrefix(host, ":") {
