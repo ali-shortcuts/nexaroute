@@ -24,11 +24,12 @@ func TestFileStoreProcessKillRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 		pause := func() { fmt.Println("READY-TO-KILL"); time.Sleep(time.Hour) }
-		if stage == "before-rename" {
+		switch stage {
+		case "before-rename":
 			s.fs.rename = func(string, string) error { pause(); return nil }
-		} else if stage == "after-rename" {
+		case "after-rename":
 			s.fs.openDir = func(string) (fileStoreDir, error) { pause(); return nil, nil }
-		} else {
+		default:
 			t.Fatal("unknown crash stage")
 		}
 		_ = s.SaveDraft(context.Background(), Definition{ID: "attempt"})

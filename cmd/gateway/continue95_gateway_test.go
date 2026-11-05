@@ -2183,11 +2183,12 @@ func Continue95GatewayFakeRESPServer(t *testing.T) string {
 					// go-redis negotiates RESP3 with HELLO first and
 					// requires a map reply (server/version/proto/id/
 					// mode/role/modules); a status reply fails Ping.
-					if cmd == "HELLO" {
+					switch cmd {
+					case "HELLO":
 						_, _ = c.Write([]byte("%7\r\n+server\r\n+redis\r\n+version\r\n+7.0.0\r\n+proto\r\n:3\r\n+id\r\n:1\r\n+mode\r\n+standalone\r\n+role\r\n+master\r\n+modules\r\n*0\r\n"))
-					} else if cmd == "PING" {
+					case "PING":
 						_, _ = c.Write([]byte("+PONG\r\n"))
-					} else {
+					default:
 						_, _ = c.Write([]byte("+OK\r\n"))
 					}
 				}
