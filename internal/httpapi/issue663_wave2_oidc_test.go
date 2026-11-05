@@ -51,6 +51,7 @@ func TestWave2OIDCConstructorNilContext(t *testing.T) {
 	cfg := wave2OIDCValidConfig(provider.server.URL, "WAVE2_OIDC_SECRET")
 	// A nil context falls back to context.Background and discovery
 	// proceeds against the loopback test issuer.
+	//lint:ignore SA1012 intentional nil-context compatibility regression test
 	if _, err := newOIDCAuthenticator(nil, cfg); err != nil {
 		t.Fatalf("nil-context construction failed: %v", err)
 	}

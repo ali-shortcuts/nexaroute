@@ -11,7 +11,7 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/usage"
 )
 
-func wave4RunOpenAIStream(t *testing.T, sse string, failOn int) (*wave4SSEWriter, error, int, int) {
+func wave4RunOpenAIStream(t *testing.T, sse string, failOn int) (*wave4SSEWriter, int, int, error) {
 	t.Helper()
 	w := wave4NewSSEWriter(failOn)
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(sse))}
@@ -19,7 +19,7 @@ func wave4RunOpenAIStream(t *testing.T, sse string, failOn int) (*wave4SSEWriter
 	err := streamAnthropicToOpenAIWithUsage(w, resp, "model-x", nil, func(u usage.Counts) {
 		gotPrompt, gotCompletion = int(u.Input), int(u.Output)
 	})
-	return w, err, gotPrompt, gotCompletion
+	return w, gotPrompt, gotCompletion, err
 }
 
 func wave4OpenAIChunks(t *testing.T, w *wave4SSEWriter) []map[string]any {
@@ -63,7 +63,7 @@ func TestWave4OpenAIStreamEmptyDataSkipped(t *testing.T) {
 		"data:\n\n" +
 		wave4SSEData(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`) +
 		wave4SSEData(`{"type":"message_stop"}`)
-	w, err, gotPrompt, _ := wave4RunOpenAIStream(t, sse, 0)
+	w, gotPrompt, _, err := wave4RunOpenAIStream(t, sse, 0)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -81,7 +81,7 @@ func TestWave4OpenAIStreamEmptyDataSkipped(t *testing.T) {
 func TestWave4OpenAIStreamCacheCreationArmsUsageDetails(t *testing.T) {
 	sse := wave4SSEData(`{"type":"message_start","message":{"usage":{"input_tokens":12,"cache_creation_input_tokens":5}}}`) +
 		wave4SSEData(`{"type":"message_stop"}`)
-	w, err, _, _ := wave4RunOpenAIStream(t, sse, 0)
+	w, _, _, err := wave4RunOpenAIStream(t, sse, 0)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestWave4OpenAIStreamWriterFailures(t *testing.T) {
 	// check returns the write error.
 	{
 		sse := wave4SSEData(`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_1","name":"f","input":{"a":1}}}`)
-		w, err, _, _ := wave4RunOpenAIStream(t, sse, 2)
+		w, _, _, err := wave4RunOpenAIStream(t, sse, 2)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}
@@ -120,7 +120,7 @@ func TestWave4OpenAIStreamWriterFailures(t *testing.T) {
 	// A failing text-delta emit is caught by the same loop-end check.
 	{
 		sse := wave4SSEData(`{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}`)
-		w, err, _, _ := wave4RunOpenAIStream(t, sse, 2)
+		w, _, _, err := wave4RunOpenAIStream(t, sse, 2)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}
@@ -129,7 +129,7 @@ func TestWave4OpenAIStreamWriterFailures(t *testing.T) {
 	// translated stream error.
 	{
 		sse := wave4SSEData(`{"type":"error","error":{"type":"api_error","message":"boom"}}`)
-		w, err, _, _ := wave4RunOpenAIStream(t, sse, 2)
+		w, _, _, err := wave4RunOpenAIStream(t, sse, 2)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}
@@ -137,7 +137,7 @@ func TestWave4OpenAIStreamWriterFailures(t *testing.T) {
 	// Failing the terminal finish chunk emit returns the write error.
 	{
 		sse := wave4SSEData(`{"type":"message_stop"}`)
-		w, err, _, _ := wave4RunOpenAIStream(t, sse, 2)
+		w, _, _, err := wave4RunOpenAIStream(t, sse, 2)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}
@@ -146,7 +146,7 @@ func TestWave4OpenAIStreamWriterFailures(t *testing.T) {
 	{
 		sse := wave4SSEData(`{"type":"message_start","message":{"usage":{"input_tokens":4}}}`) +
 			wave4SSEData(`{"type":"message_stop"}`)
-		w, err, _, _ := wave4RunOpenAIStream(t, sse, 3)
+		w, _, _, err := wave4RunOpenAIStream(t, sse, 3)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}
@@ -154,7 +154,7 @@ func TestWave4OpenAIStreamWriterFailures(t *testing.T) {
 	// Failing the closing [DONE] write returns that write error.
 	{
 		sse := wave4SSEData(`{"type":"message_stop"}`)
-		w, err, _, _ := wave4RunOpenAIStream(t, sse, 3)
+		w, _, _, err := wave4RunOpenAIStream(t, sse, 3)
 		if !errors.Is(err, w.failErr) {
 			t.Fatalf("err = %v, want the injected write error", err)
 		}

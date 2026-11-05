@@ -233,7 +233,8 @@ func TestMission95BudgetAlertPeriodDedupPrune(t *testing.T) {
 	if budgetAlertDedupKey("b", "p", 80) == budgetAlertDedupKey("b", "p", 90) {
 		t.Error("distinct thresholds share a dedup key")
 	}
-	if budgetAlertDedupKey("b", "p", 80) != budgetAlertDedupKey("b", "p", 80) {
+	firstDedupKey := budgetAlertDedupKey("b", "p", 80)
+	if firstDedupKey != budgetAlertDedupKey("b", "p", 80) {
 		t.Error("dedup key not deterministic")
 	}
 

@@ -60,8 +60,6 @@ func TestMission95SSEReader(t *testing.T) {
 		t.Fatalf("empty stream = %v, done=%v, err=%v", events, done, err)
 	}
 	// Scanner errors surface instead of being swallowed as EOF.
-	events, _, err = readAll("")
-	_ = events
 	broken := newSSEReader(&errReader{err: errors.New("stream broken")})
 	if _, _, err := broken.Next(); err == nil {
 		t.Error("scanner error swallowed")
@@ -254,7 +252,8 @@ func TestMission95NormalizeRequestIDAndStreamID(t *testing.T) {
 	if got := uniqueStreamID("req", "!!!"); !strings.HasPrefix(got, "req_") || got == "req_" {
 		t.Errorf("stream id with unusable request id = %q", got)
 	}
-	if uniqueStreamID("req", "same") != uniqueStreamID("req", "same") {
+	firstStreamID := uniqueStreamID("req", "same")
+	if firstStreamID != uniqueStreamID("req", "same") {
 		t.Error("stream id not deterministic for a given request id")
 	}
 	// anthropicErrorJSON maps statuses to error types.
