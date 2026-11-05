@@ -156,6 +156,7 @@ func TestIssue663ProvidersRunPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runner.Close()
+	//lint:ignore SA1012 this test verifies the documented nil-context fallback.
 	report := runner.Run(nil)
 	if report.Outcome != OutcomePass || len(report.Scenarios) != 5 {
 		t.Fatalf("nil-context run = outcome %s, %d scenarios, want PASS/5", report.Outcome, len(report.Scenarios))

@@ -752,6 +752,7 @@ func TestContinue95NewConstructionEdges(t *testing.T) {
 	r := Continue95Runner(t, "openai_compatible", &Continue95StubAdapter{status: 200, body: Continue95OpenAIChatBody("OK", "stop", "")})
 	r.scenarios = []scenario{Continue95Scenario("text")}
 	r.limits.MaxCalls = 1
+	//lint:ignore SA1012 this test verifies the documented nil-context fallback.
 	report := r.Run(nil)
 	if report.Outcome != OutcomePass {
 		t.Fatalf("nil ctx run outcome=%s", report.Outcome)

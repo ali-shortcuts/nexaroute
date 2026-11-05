@@ -239,7 +239,7 @@ func validateTransitPath(p string, allowMulti bool) error {
 	}
 	for _, s := range segments {
 		if s == "." || s == ".." || !transitSegment.MatchString(s) {
-			return errors.New("path segments must use only letters, digits, dot, underscore, or hyphen, and must not be . or ..")
+			return errors.New("path segments must use only letters, digits, dot, underscore, or hyphen, and must not be dot or dot-dot")
 		}
 	}
 	return nil
@@ -500,19 +500,19 @@ func isLowerHex(s string) bool {
 func ParseTransitCiphertextVersion(s string) (int, error) {
 	parts := strings.Split(s, ":")
 	if len(parts) != 3 || parts[0] != "vault" {
-		return 0, errors.New("Transit ciphertext must have exactly three colon-separated parts starting with vault")
+		return 0, errors.New("transit ciphertext must have exactly three colon-separated parts starting with vault")
 	}
 	vpart := parts[1]
 	if len(vpart) < 2 || vpart[0] != 'v' {
-		return 0, errors.New("Transit ciphertext version must have the form v<decimal>")
+		return 0, errors.New("transit ciphertext version must have the form v<decimal>")
 	}
 	digits := vpart[1:]
 	if len(digits) > 1 && digits[0] == '0' {
-		return 0, errors.New("Transit ciphertext version must not have leading zeros")
+		return 0, errors.New("transit ciphertext version must not have leading zeros")
 	}
 	for _, r := range digits {
 		if r < '0' || r > '9' {
-			return 0, errors.New("Transit ciphertext version must be decimal")
+			return 0, errors.New("transit ciphertext version must be decimal")
 		}
 	}
 	v, err := strconv.Atoi(digits)

@@ -709,7 +709,8 @@ func TestOpencodeSessionGatingScopeAndLeak(t *testing.T) {
 		if DeriveOpencodeSessionValueScoped(goCfg(), "vk-alpha", "", "m1") == DeriveOpencodeSessionValueScoped(goCfg(), "vk-beta", "", "m1") {
 			t.Fatal("scoped fallback must differ per scope")
 		}
-		if DeriveOpencodeSessionValueScoped(goCfg(), "vk-alpha", "", "m1") != DeriveOpencodeSessionValueScoped(goCfg(), "vk-alpha", "", "m1") {
+		firstScopedFallback := DeriveOpencodeSessionValueScoped(goCfg(), "vk-alpha", "", "m1")
+		if firstScopedFallback != DeriveOpencodeSessionValueScoped(goCfg(), "vk-alpha", "", "m1") {
 			t.Fatal("scoped fallback must be deterministic")
 		}
 	})
