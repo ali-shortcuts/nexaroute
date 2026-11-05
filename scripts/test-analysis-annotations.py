@@ -54,6 +54,17 @@ def main():
     if "report unavailable" not in missing:
         raise AssertionError("missing-report notice = %r" % missing)
 
+    with tempfile.TemporaryDirectory() as directory:
+        report = pathlib.Path(directory) / "coverage-test.txt"
+        report.write_text(
+            "--- FAIL: TestExample (0.00s)\n    internal/example_test.go:17: wanted 100% output\n",
+            encoding="utf-8",
+        )
+        output = run("gotest", str(report))
+    expected = "::error title=Go test failure::internal/example_test.go:17: wanted 100%25 output\n"
+    if output != expected:
+        raise AssertionError("test annotation output = %r, want %r" % (output, expected))
+
     print("analysis annotation regression PASS")
 
 

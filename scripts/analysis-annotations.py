@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Publish analyzer findings as GitHub Actions annotations.
+"""Publish quality-gate diagnostics as GitHub Actions annotations.
 
-The Architecture & Quality Audit keeps full machine-readable reports as
-artifacts, but those artifact downloads are not always reachable from every
-review environment. This helper converts golangci-lint's JSON report into
-check-run annotations, which remain visible through GitHub's API:
+The Architecture & Quality Audit keeps reports as artifacts, but those artifact
+downloads are not always reachable from every review environment. This helper
+converts golangci-lint JSON and Go-test failure output into check-run
+annotations, which remain visible through GitHub's API:
 
     python3 scripts/analysis-annotations.py golangci golangci.json
+    python3 scripts/analysis-annotations.py gotest coverage-test.txt
 
 The helper is diagnostic only: it deliberately exits zero for an unavailable
-or malformed report. The analyzer's own step remains the quality gate, while
+or malformed report. The analyzer/test step remains the quality gate, while
 this companion makes its findings reviewable.
 """
 
 import json
 import os
+import re
 import sys
 
 MAX_ANNOTATIONS = 50
@@ -92,11 +94,50 @@ def annotate_golangci(report_path):
         )
 
 
+GO_TEST_FAILURE = re.compile(r"^\s*(?P<file>[\w./-]+\.go):(?P<line>\d+):\s*(?P<message>.+)$")
+
+
+def annotate_gotest(report_path):
+    """Expose source lines emitted by a failing ``go test`` invocation.
+
+    Go's test output usually reports a package-relative file name, so attaching
+    a potentially wrong repository path would make an annotation misleading.
+    Keep the source location in the message instead; it remains searchable via
+    the check-run API and gives reviewers the exact assertion text.
+    """
+    try:
+        with open(report_path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        print("::notice title=Go test report unavailable::No test log was written; the test step remains authoritative.")
+        return
+    except OSError as exc:
+        print("::warning title=Go test report unreadable::Cannot annotate test failures: %s" % escape_data(exc))
+        return
+
+    findings = []
+    for raw in lines:
+        match = GO_TEST_FAILURE.match(raw)
+        if match:
+            findings.append("%s:%s: %s" % (match.group("file"), match.group("line"), match.group("message")))
+    for finding in findings[:MAX_ANNOTATIONS]:
+        print("::error title=Go test failure::%s" % escape_data(finding))
+    if len(findings) > MAX_ANNOTATIONS:
+        print(
+            "::warning title=Go test annotation limit::"
+            "Annotated the first %d of %d failure lines; see the test log for the rest."
+            % (MAX_ANNOTATIONS, len(findings))
+        )
+
+
 def main(argv):
-    if len(argv) != 3 or argv[1] != "golangci":
+    if len(argv) != 3 or argv[1] not in ("golangci", "gotest"):
         print(__doc__)
         return 2
-    annotate_golangci(argv[2])
+    if argv[1] == "golangci":
+        annotate_golangci(argv[2])
+    else:
+        annotate_gotest(argv[2])
     return 0
 
 
