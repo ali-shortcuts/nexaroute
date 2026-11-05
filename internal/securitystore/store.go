@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 var (
@@ -302,7 +303,7 @@ func (s *Store) Close() error {
 // decide that a stopped-gateway operation must not be retried against
 // a live gateway and to tell the operator exactly that.
 func IsLockedError(err error) bool {
-	return errors.Is(err, bolt.ErrTimeout)
+	return errors.Is(err, bolterrors.ErrTimeout)
 }
 
 func validSessionHash(hash string) ([]byte, error) {

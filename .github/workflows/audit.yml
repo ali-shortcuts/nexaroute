@@ -43,6 +43,12 @@ jobs:
         with:
           version: v2.15.0
           args: --timeout=20m --output.text.path=golangci.txt --output.json.path=golangci.json
+      - name: Annotate golangci-lint findings
+        # Preserve source-level diagnostics even when artifact downloads are
+        # unavailable to a reviewer. This is diagnostic only; the action above
+        # remains the zero-baseline quality gate.
+        if: always()
+        run: python3 scripts/analysis-annotations.py golangci golangci.json
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

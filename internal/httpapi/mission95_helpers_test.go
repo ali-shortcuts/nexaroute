@@ -84,7 +84,7 @@ func TestMission95ReadJSON(t *testing.T) {
 	var dst map[string]any
 	req := httptest.NewRequest(http.MethodPost, "/admin/api/providers", strings.NewReader(`{"a":1}`))
 	req.Header.Set("Content-Type", "text/plain")
-	if _, err := readJSON(req, &dst); err == nil || !strings.Contains(err.Error(), "Content-Type") {
+	if _, err := readJSON(req, &dst); err == nil || !strings.Contains(err.Error(), "content type") {
 		t.Errorf("non-JSON admin body accepted: %v", err)
 	}
 	// Content-Type with parameters is accepted.
