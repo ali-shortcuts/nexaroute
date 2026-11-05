@@ -1,6 +1,6 @@
 name: Kubernetes live acceptance
 
-# Manual, opt-in runner for issue #650. It executes
+# Manual and PR-triggered runner for issue #650. It executes
 # `scripts/k8s-acceptance.sh --live` on a GitHub-hosted runner, which has a
 # working container runtime. The script creates and deletes its OWN disposable
 # kind cluster; it never touches an existing cluster and uses only sentinel
