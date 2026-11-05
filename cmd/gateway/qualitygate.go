@@ -100,19 +100,19 @@ func writeReport(path string, data []byte, stdout io.Writer) error {
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := os.Chmod(tmpName, 0o600); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	fmt.Fprintf(stdout, "report written to %s\n", path)
@@ -158,7 +158,10 @@ func runQualityGateSummarize(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	stdout.Write(append(out, '\n'))
+	if _, err := stdout.Write(append(out, '\n')); err != nil {
+		fmt.Fprintln(stderr, "nexaroute: quality-gate summarize:", err)
+		return 2
+	}
 	return 0
 }
 

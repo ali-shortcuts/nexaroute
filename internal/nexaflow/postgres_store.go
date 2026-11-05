@@ -18,6 +18,14 @@ import (
 // state before any retry; AppendNodeExecution is not replay-idempotent.
 var ErrPostgresCommitUncertain = errors.New("nexaflow: postgres commit outcome uncertain; reconcile before retry")
 
+// rollbackPostgres is the best-effort transaction cleanup paired with a
+// successful commit or a more actionable operation error. A rollback after a
+// commit returns sql.ErrTxDone, and replacing the primary error with a
+// rollback failure would obscure the operation that actually failed.
+func rollbackPostgres(tx *sql.Tx) {
+	_ = tx.Rollback()
+}
+
 func commitPostgres(tx *sql.Tx) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%w: %w", ErrPostgresCommitUncertain, err)
@@ -105,7 +113,7 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("nexaflow: begin workflow migration: %w", err)
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, wfMigrateLock); err != nil {
 		return fmt.Errorf("nexaflow: workflow migration lock: %w", err)
 	}
@@ -254,7 +262,7 @@ func (s *PostgresStore) publish(ctx context.Context, definitionID, publishedBy, 
 	if err != nil {
 		return PublishedDefinition{}, err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	var raw []byte
 	err = tx.QueryRowContext(ctx, `SELECT draft FROM `+wfDefsTable+` WHERE definition_id = $1 FOR UPDATE`, definitionID).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -348,7 +356,7 @@ func (s *PostgresStore) SupersedeRevision(ctx context.Context, definitionID stri
 	if err != nil {
 		return PublishedDefinition{}, err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	res, err := tx.ExecContext(ctx,
 		`UPDATE `+wfRevsTable+` SET status = $1 WHERE definition_id = $2 AND revision = $3 AND status = $4`,
 		string(DefinitionSuperseded), definitionID, revision, string(DefinitionPublished))
@@ -505,7 +513,7 @@ func (s *PostgresStore) CreateRun(ctx context.Context, run Run) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	if limit := run.Definition.Settings.MaxConcurrentRuns; limit > 0 {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, run.DefinitionID); err != nil {
 			return err
@@ -570,7 +578,7 @@ func (s *PostgresStore) UpdateRunState(ctx context.Context, runID string, expect
 	if err != nil {
 		return Run{}, err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	row := tx.QueryRowContext(ctx, `SELECT `+runColumns+` FROM `+wfRunsTable+` WHERE run_id = $1 FOR UPDATE`, runID)
 	cur, err := scanRun(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -654,7 +662,7 @@ func (s *PostgresStore) Prune(ctx context.Context, before time.Time) (int, error
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	terminal := []string{string(RunSucceeded), string(RunFailed), string(RunCancelled)}
 	// READ COMMITTED gives each statement a new snapshot. Freeze and lock
 	// the eligible run set before deleting any child rows; otherwise a run
@@ -737,7 +745,7 @@ func (s *PostgresStore) AppendNodeExecution(ctx context.Context, exec NodeExecut
 	if err != nil {
 		return NodeExecution{}, err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	// Serialize appends for a run, including the first attempt when no node
 	// row exists. This protects MAX(attempt)+1 and the operation lookup.
 	var lockedRun string
@@ -797,7 +805,7 @@ func (s *PostgresStore) SaveNodeExecution(ctx context.Context, exec NodeExecutio
 	if err != nil {
 		return NodeExecution{}, err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	row := tx.QueryRowContext(ctx,
 		`SELECT run_id, node_id, attempt, payload, state, lease_owner, lease_until FROM `+wfNodesTable+` WHERE run_id = $1 AND node_id = $2 AND attempt = $3 FOR UPDATE`,
 		exec.RunID, exec.NodeID, exec.Attempt)
@@ -897,7 +905,7 @@ func (s *PostgresStore) TryClaim(ctx context.Context, runID, nodeID, owner strin
 	if err != nil {
 		return NodeExecution{}, false, err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	var attempt int
 	err = tx.QueryRowContext(ctx,
 		`SELECT attempt FROM `+wfNodesTable+` WHERE run_id = $1 AND node_id = $2 ORDER BY attempt DESC LIMIT 1 FOR UPDATE`,
@@ -965,7 +973,7 @@ func (s *PostgresStore) RecordApproval(ctx context.Context, appr Approval) (Appr
 	if err != nil {
 		return Approval{}, err
 	}
-	defer tx.Rollback()
+	defer rollbackPostgres(tx)
 	// A missing row cannot be protected by SELECT FOR UPDATE. Insert first
 	// with ON CONFLICT so concurrent first decisions serialize on the unique
 	// key; only the winner inserts, and losers read the committed record.

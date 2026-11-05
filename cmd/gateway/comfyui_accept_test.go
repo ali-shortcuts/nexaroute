@@ -256,17 +256,17 @@ func TestComfyUIAcceptTimeoutCleansUpPendingPrompt(t *testing.T) {
 func TestComfyUIAcceptOversizedOutputLeavesNoPartialAsset(t *testing.T) {
 	videoBytes := bytes.Repeat([]byte("x"), 32)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/system_stats":
+		switch r.URL.Path {
+		case "/system_stats":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"system":{"comfyui_version":"test"},"devices":[]}`))
-		case r.URL.Path == "/prompt":
+		case "/prompt":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"prompt_id":"prompt-large"}`))
-		case r.URL.Path == "/history/prompt-large":
+		case "/history/prompt-large":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"prompt-large":{"outputs":{"10":{"videos":[{"filename":"large.mp4","subfolder":"","type":"output"}]}},"status":{"status_str":"success","completed":true}}}`))
-		case r.URL.Path == "/view":
+		case "/view":
 			w.Header().Set("Content-Type", "video/mp4")
 			_, _ = w.Write(videoBytes)
 		default:
@@ -298,17 +298,17 @@ func TestComfyUIAcceptOversizedOutputLeavesNoPartialAsset(t *testing.T) {
 
 func TestComfyUIAcceptCompletedWithoutMP4FailsClosed(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/system_stats":
+		switch r.URL.Path {
+		case "/system_stats":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"system":{"comfyui_version":"test"},"devices":[]}`))
-		case r.URL.Path == "/prompt":
+		case "/prompt":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"prompt_id":"prompt-gif"}`))
-		case r.URL.Path == "/history/prompt-gif":
+		case "/history/prompt-gif":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"prompt-gif":{"outputs":{"10":{"gifs":[{"filename":"preview.gif","subfolder":"","type":"output"}]}},"status":{"status_str":"success","completed":true}}}`))
-		case r.URL.Path == "/queue":
+		case "/queue":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"queue_running":[],"queue_pending":[]}`))
 		default:

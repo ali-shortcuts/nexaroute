@@ -58,6 +58,10 @@ func Continue95GatewayQualityGate(args []string) (int, string, string) {
 	return code, out.String(), errBuf.String()
 }
 
+type Continue95GatewayErrorWriter struct{ err error }
+
+func (w Continue95GatewayErrorWriter) Write(_ []byte) (int, error) { return 0, w.err }
+
 // Continue95GatewayLiveInput rewrites a replay input file as a live input.
 func Continue95GatewayLiveInput(t *testing.T, path string, upstream int, cost *float64) string {
 	t.Helper()
@@ -167,6 +171,11 @@ func TestContinue95GatewayQualityGateSummarizeAndCompareBranches(t *testing.T) {
 	// Summarize to stdout (no --out).
 	if code, out, errOut := Continue95GatewayQualityGate([]string{"summarize", "--input", base}); code != 0 || !strings.Contains(out, "quality-gate-snapshot") {
 		t.Fatalf("summarize stdout exit=%d out=%q err=%q", code, out, errOut)
+	}
+	writeErr := errors.New("synthetic stdout failure")
+	var failedOutErr bytes.Buffer
+	if code := runQualityGateSummarize([]string{"--input", base}, Continue95GatewayErrorWriter{err: writeErr}, &failedOutErr); code != 2 || !strings.Contains(failedOutErr.String(), writeErr.Error()) {
+		t.Fatalf("summarize failed stdout exit=%d stderr=%q", code, failedOutErr.String())
 	}
 	// Summarize with an invalid input (Summarize validation failure):
 	// a valid-format input with no runs.
@@ -1698,14 +1707,14 @@ func TestContinue95GatewayComfyAcceptBranches(t *testing.T) {
 	}
 	// Completed job with no outputs -> download check fails (383/410 path).
 	emptyOutServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/system_stats":
+		switch r.URL.Path {
+		case "/system_stats":
 			_, _ = w.Write([]byte(`{"system":{"comfyui_version":"test"},"devices":[]}`))
-		case r.URL.Path == "/prompt":
+		case "/prompt":
 			_, _ = w.Write([]byte(`{"prompt_id":"prompt-empty"}`))
-		case r.URL.Path == "/history/prompt-empty":
+		case "/history/prompt-empty":
 			_, _ = w.Write([]byte(`{"prompt-empty":{"outputs":{},"status":{"status_str":"success","completed":true}}}`))
-		case r.URL.Path == "/queue":
+		case "/queue":
 			_, _ = w.Write([]byte(`{"queue_running":[],"queue_pending":[]}`))
 		default:
 			http.NotFound(w, r)
@@ -1739,10 +1748,10 @@ func TestContinue95GatewayComfyAcceptBranches(t *testing.T) {
 	}, "config.json")
 	_ = videoCfg
 	failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/system_stats":
+		switch r.URL.Path {
+		case "/system_stats":
 			_, _ = w.Write([]byte(`{"system":{"comfyui_version":"test"},"devices":[]}`))
-		case r.URL.Path == "/history/prompt-failstate":
+		case "/history/prompt-failstate":
 			_, _ = w.Write([]byte(`{"prompt-failstate":{"outputs":{},"status":{"status_str":"error","completed":false}}}`))
 		default:
 			w.WriteHeader(http.StatusInternalServerError)
