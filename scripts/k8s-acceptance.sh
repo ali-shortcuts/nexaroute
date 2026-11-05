@@ -840,10 +840,12 @@ live_phase() {
   done
   if [[ "$missing" -eq 1 ]]; then
     notrun "live acceptance: required tools missing (see above)"
+    printf '\nRESULT: NOT_RUN (live prerequisites missing; offline phases above still stand)\n'
     return 3
   fi
   if ! git rev-parse --verify --quiet "$PREV_TAG" >/dev/null; then
     notrun "live acceptance: preceding tag $PREV_TAG not present in this checkout (fetch tags first)"
+    printf '\nRESULT: NOT_RUN (preceding supported-release tag is unavailable)\n'
     return 3
   fi
   if kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then
@@ -990,9 +992,12 @@ PY
   # Persistence + graceful termination, measured in one pod restart:
   # backup to the PVC, delete the pod with the chart's grace period,
   # and require the replacement to become Ready on the same claim.
-  kubectl_ns exec "deploy/${RELEASE}-nexaroute" -- /nexaroute backup \
-    --config /config/config.json --out /config/backup-accept.tar >"$OUT_DIR/backup.log" 2>&1
-  ok "backup to PVC succeeded before restart"
+  # The gateway holds the bbolt writer lock while running. Use its authenticated
+  # in-process snapshot endpoint instead of opening the store from a second CLI
+  # process; the snapshot is verified by both the gateway and backup CLI.
+  kubectl_ns exec "deploy/${RELEASE}-nexaroute" -- /nexaroute backup --live \
+    --config /config/config.json --out /config/backup-before-restart.tar >"$OUT_DIR/backup-before-restart.log" 2>&1
+  ok "live security-store snapshot and backup succeeded before restart"
   local pvc_uid pod_name termination_ms restart_hash
   pvc_uid="$(kubectl_ns get pvc -l "app.kubernetes.io/instance=$RELEASE" -o jsonpath='{.items[0].metadata.uid}')"
   pod_name="$(kubectl_ns get pod -l "app.kubernetes.io/instance=$RELEASE" -o jsonpath='{.items[0].metadata.name}')"
@@ -1040,9 +1045,12 @@ PY
   if [[ "$(kubectl_ns get pvc -l "app.kubernetes.io/instance=$RELEASE" -o jsonpath='{.items[0].metadata.uid}')" == "$pvc_uid" ]]; then
     ok "same PVC retained across pod restart"
   else fail "PVC changed across pod restart"; fi
-  kubectl_ns exec "deploy/${RELEASE}-nexaroute" -- /nexaroute doctor \
-    --config /config/config.json >"$OUT_DIR/doctor-after-restart.log" 2>&1
-  ok "doctor passes after restart on the retained PVC"
+  # doctor opens the file-backed bbolt store directly and is intentionally
+  # incompatible with a running gateway's exclusive writer lock. Revalidate
+  # the retained store through the gateway's live snapshot API instead.
+  kubectl_ns exec "deploy/${RELEASE}-nexaroute" -- /nexaroute backup --live \
+    --config /config/config.json --out /config/backup-after-restart.tar >"$OUT_DIR/backup-after-restart.log" 2>&1
+  ok "live security-store snapshot and backup succeeded after pod restart"
 
   # Rollback: swap the operator-managed config back FIRST (helm
   # rollback does not touch it), then roll back to revision 1.
@@ -1705,6 +1713,83 @@ PYEOF
   else
     fail "self-test: termination observer finalizer changed unrelated finalizers or cleanup did not run"
   fi
+
+  # 15. The live phase must run as a simple command. Placing a function
+  # call in an OR-list disables Bash errexit inside the whole function,
+  # allowing failed kubectl exec commands to be followed by false PASS lines.
+  local errexit_code=0
+  "$BASH" -c 'set -e; fail_now() { false; printf "unreachable\\n"; }; fail_now' \
+    >"$tmp/errexit.log" 2>&1 || errexit_code=$?
+  if [[ "$errexit_code" -ne 0 ]] \
+      && ! grep -q "unreachable" "$tmp/errexit.log" \
+      && ! grep -Eq '^[[:space:]]*live_phase[[:space:]]*\\|\\|' "$0"; then
+    ok "self-test: live phase preserves errexit and cannot mask failed required commands"
+  else
+    fail "self-test: live phase is wrapped in an OR-list or shell errexit regression was not detected"
+  fi
+
+  # 16. Python is PID 1 in the disposable stub container. It needs an
+  # explicit SIGTERM handler; the handler must ask HTTPServer to shut down
+  # from another thread (calling shutdown in serve_forever's own thread deadlocks).
+  if python3 - "$STUB_MANIFEST" "$tmp/acceptance-stub.py" <<'PYEOF'
+import os, signal, socket, subprocess, sys, time, urllib.request
+
+manifest, script_path = sys.argv[1:]
+lines = open(manifest, encoding="utf-8").read().splitlines()
+start = next(i for i, line in enumerate(lines) if line.strip() == "stub.py: |")
+body = []
+for line in lines[start + 1:]:
+    if line.startswith("    "):
+        body.append(line[4:])
+    elif not line.strip():
+        body.append("")
+    else:
+        break
+source = "\\n".join(body).rstrip() + "\\n"
+required = (
+    "signal.signal(signal.SIGTERM, stop_server)",
+    "threading.Thread(target=server.shutdown, daemon=True).start()",
+)
+if not all(fragment in source for fragment in required):
+    raise SystemExit("stub is missing explicit, deadlock-safe SIGTERM handling")
+open(script_path, "w", encoding="utf-8").write(source)
+with socket.socket() as probe:
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+env = dict(os.environ, STUB_PORT=str(port))
+process = subprocess.Popen([sys.executable, script_path], env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+try:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise SystemExit(f"stub exited before readiness (code {process.returncode})")
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=0.5) as response:
+                if response.status == 200:
+                    break
+        except Exception:
+            time.sleep(0.05)
+    else:
+        raise SystemExit("stub did not become ready for shutdown self-test")
+    process.send_signal(signal.SIGTERM)
+    try:
+        code = process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        raise SystemExit("stub did not stop within 3s after SIGTERM")
+    if code != 0:
+        raise SystemExit(f"stub exited nonzero after SIGTERM ({code})")
+finally:
+    if process.poll() is None:
+        process.kill()
+        process.wait()
+print("PASS: acceptance stub exits cleanly after SIGTERM")
+PYEOF
+  then
+    ok "self-test: acceptance stub handles SIGTERM without consuming the pod grace period"
+  else
+    fail "self-test: acceptance stub did not exit cleanly after SIGTERM"
+  fi
 }
 
 section "NexaRoute Kubernetes acceptance ($MODE)"
@@ -1717,16 +1802,12 @@ if [[ "$MODE" == "selftest" ]]; then
 fi
 offline_phase
 if [[ "$MODE" == "live" ]]; then
-  live_code=0
-  live_phase || live_code=$?
-  if [[ "$live_code" -eq 3 && "$FAILURES" -eq 0 ]]; then
-    printf '\nRESULT: NOT_RUN (live prerequisites missing; offline phases above still stand)\n'
-    exit 3
-  fi
-  if [[ "$live_code" -ne 0 ]]; then
-    printf '\nRESULT: live phase failed (code %s)\n' "$live_code" >&2
-    exit 1
-  fi
+  # Do not place live_phase in an if/OR-list/command substitution. Bash
+  # suppresses errexit inside functions invoked conditionally; this used
+  # to convert failed CLI commands into misleading PASS records. A direct
+  # call preserves set -e and the EXIT trap always cleans the disposable kind
+  # cluster if any required command fails.
+  live_phase
 fi
 
 printf '\nRESULT: failures=%s not_run=%s\n' "$FAILURES" "$NOTRUNS"
