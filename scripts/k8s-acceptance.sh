@@ -1720,9 +1720,11 @@ PYEOF
   local errexit_code=0
   "$BASH" -c 'set -e; fail_now() { false; printf "unreachable"; }; fail_now' \
     >"$tmp/errexit.log" 2>&1 || errexit_code=$?
+  local forbidden_call='live_phase'
+  forbidden_call+=' || live_code=$?'
   if [[ "$errexit_code" -ne 0 ]] \
       && ! grep -q "unreachable" "$tmp/errexit.log" \
-            && ! grep -Fq 'live_phase || live_code=$?' "$0"; then
+      && ! grep -Fq "$forbidden_call" "$0"; then
     ok "self-test: live phase preserves errexit and cannot mask failed required commands"
   else
     fail "self-test: live phase is wrapped in an OR-list or shell errexit regression was not detected"
