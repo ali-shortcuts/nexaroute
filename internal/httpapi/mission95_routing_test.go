@@ -120,7 +120,8 @@ func TestMission95GatewayDeadlineAndRouteContext(t *testing.T) {
 	if jitteredRetryBackoff(0, 1, "x") != 0 || jitteredRetryBackoff(-time.Second, 1, "x") != 0 {
 		t.Error("non-positive base did not yield zero backoff")
 	}
-	if jitteredRetryBackoff(time.Second, 2, "req-1") != jitteredRetryBackoff(time.Second, 2, "req-1") {
+	firstBackoff := jitteredRetryBackoff(time.Second, 2, "req-1")
+	if firstBackoff != jitteredRetryBackoff(time.Second, 2, "req-1") {
 		t.Error("backoff not deterministic")
 	}
 	if jitteredRetryBackoff(10*time.Second, 6, "x") > 5*time.Second {
