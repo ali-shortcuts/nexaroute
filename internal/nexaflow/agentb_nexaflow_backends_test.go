@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ali-shortcuts/nexaroute/internal/authz"
@@ -158,6 +160,92 @@ func TestAgentBHTTPVideoAssetAuthTokenError(t *testing.T) {
 	agentBRequireNodeError(t, err, "secret_error", "auth token resolution failed")
 	if calls != 2 {
 		t.Fatalf("resolver calls = %d, want 2 (status + asset)", calls)
+	}
+}
+
+// agentBCancelOnCloseBody cancels ctx the first time the wrapped response
+// body is closed. doJSON closes the body only after fully reading and
+// decoding it, so the cancel lands strictly between VideoAsset's status
+// call and its asset-request construction.
+type agentBCancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (b *agentBCancelOnCloseBody) Close() error {
+	b.once.Do(b.cancel)
+	return b.ReadCloser.Close()
+}
+
+// agentBCancelOnBodyCloseTransport wraps every response body so its Close
+// cancels ctx (see agentBCancelOnCloseBody).
+type agentBCancelOnBodyCloseTransport struct {
+	base   http.RoundTripper
+	cancel context.CancelFunc
+}
+
+func (t *agentBCancelOnBodyCloseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = &agentBCancelOnCloseBody{ReadCloser: resp.Body, cancel: t.cancel}
+	return resp, nil
+}
+
+func TestAgentBHTTPVideoAssetCanceledContext(t *testing.T) {
+	// Behavior coverage (NOT a regression test for commit d24d27cd):
+	// a context canceled between VideoAsset's status call and its
+	// asset request must fail closed with backend_error, never panic
+	// and never attempt the download.
+	//
+	// Correction to supervisor guidance 6691513651: the canceled-
+	// context panic premise behind it is wrong. Go 1.27's
+	// http.NewRequestWithContext errors only on an invalid method, a
+	// nil context, or a URL parse failure — it never returns
+	// ctx.Err() — so on a canceled context it returns a usable
+	// request and the failure surfaces at client.Do instead. This
+	// test passes identically with and without d24d27cd (verified by
+	// running it against the pre-fix file); the restored
+	// validateLoopbackBaseURL / NewRequestWithContext error checks are
+	// defense-in-depth on branches unreachable once the status call
+	// succeeded (constant GET, already-validated URL, escaped path
+	// segments). The test pins the fail-closed behavior, not the fix.
+	// The cancel is driven by the status response body closing, which
+	// doJSON does only after the body is fully read and decoded — so
+	// the context is live for the whole status call and dead before
+	// the asset request is built. No sleep, no race.
+	assetHits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/v1/video/jobs/job-9/assets/"):
+			assetHits++
+			fmt.Fprint(w, "asset-bytes")
+		case strings.HasPrefix(r.URL.Path, "/v1/video/jobs/"):
+			fmt.Fprint(w, `{"job_id":"job-9","state":"completed","output_assets":[{"id":"a1","filename":"out.mp4","content_type":"video/mp4","sha256":"abc","size_bytes":11}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &GatewayClient{
+		BaseURL: srv.URL,
+		HTTPClient: &http.Client{
+			Transport: &agentBCancelOnBodyCloseTransport{base: http.DefaultTransport, cancel: cancel},
+		},
+	}
+	_, _, err := client.VideoAsset(ctx, "job-9", "a1")
+	// The failure surfaces at client.Do (canceled context), not at
+	// request construction: NewRequestWithContext never returns
+	// ctx.Err(). Either backend_error wording is the fail-closed
+	// outcome; the pinned facts are the code and that no download
+	// was attempted.
+	agentBRequireNodeError(t, err, "backend_error", "")
+	if assetHits != 0 {
+		t.Fatalf("asset endpoint hit %d times, want 0 (request must fail before any download)", assetHits)
 	}
 }
 
