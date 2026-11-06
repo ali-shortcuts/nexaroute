@@ -185,6 +185,15 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	forward := copySelectedRequestHeaders(r)
 
 	attempts := 0
+	// A budget hold is released only if no upstream request was dispatched.
+	// Once dispatch begins, provider-side execution may be ambiguous and the
+	// ledger's TTL backstop remains the conservative accounting behavior.
+	attemptedUpstream := false
+	defer func() {
+		if !attemptedUpstream {
+			s.budgetRelease(r)
+		}
+	}()
 	skip := map[int]bool{}
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		if skip[i] {
@@ -225,6 +234,7 @@ func (s *Server) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		s.autopilotNoteDispatched(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "anthropic", in.Model, attemptIndex+1, c, attemptKind)
+		attemptedUpstream = true
 		out, winner, hedgeLaunched := s.doAttemptWithHedge(routeCtx, r.Header.Get("x-request-id"), cfg, candidates, i, attempts, max, primary,
 			func(idx int) (hedgeAttemptBundle, bool) {
 				if _, ineligible := s.capabilityIneligible(r.Header.Get("x-request-id"), candidates[idx].Deployment.ID, profile); ineligible {
