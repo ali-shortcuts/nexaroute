@@ -228,7 +228,13 @@ func (s *Server) recordAudit(event securitystore.AuditEvent) error {
 	if s.securityErr != nil || s.securityDB == nil {
 		return errors.New("admin security store unavailable")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Audit appends are durable pre-operation gates. The bbolt writer is
+	// serialized and each append verifies the persisted hash chain, so a
+	// short 3s deadline can reject healthy bursts of concurrent emergency
+	// admin requests (for example, many SSE dashboards reconnecting at once).
+	// Keep the write synchronous and fail-closed, but give the bounded audit
+	// transaction enough time to clear an ordinary serialized burst.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return s.securityDB.AppendAudit(ctx, event)
 }
