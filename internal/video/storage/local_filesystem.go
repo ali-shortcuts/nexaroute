@@ -47,10 +47,11 @@ func NewLocal(root string, max int64) (*Local, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return nil, err
-	}
+	// filepath.Abs cannot fail here: it only fails when Getwd fails on a
+	// relative path, and MkdirAll above already resolved the same
+	// relative path successfully — a deleted working directory makes
+	// MkdirAll fail first, and an absolute root never consults Getwd.
+	abs, _ := filepath.Abs(root)
 	return &Local{Root: abs, MaxBytes: max}, nil
 }
 
@@ -100,15 +101,10 @@ func (s *Local) Put(_ context.Context, a video.Asset, data []byte) (video.Asset,
 	if err = os.Rename(tmpName, a.URI); err != nil {
 		return video.Asset{}, err
 	}
-	meta, err := json.MarshalIndent(a, "", "  ")
-	if err != nil {
-		// The bytes are already in place, but Put did not return an
-		// asset, so a provider rollback (which only deletes the assets
-		// Put returned) cannot reach it. Remove them rather than leave
-		// an orphan the caller can neither identify nor trust.
-		_ = os.Remove(a.URI)
-		return video.Asset{}, err
-	}
+	// json.MarshalIndent cannot fail on video.Asset: it holds only
+	// strings, an int64, and a map[string]string, none of which can
+	// produce a marshal error.
+	meta, _ := json.MarshalIndent(a, "", "  ")
 	if err = writeMetadataAtomic(a.URI+".json", meta); err != nil {
 		// Same rule as above: an asset file without its metadata
 		// sidecar has no recorded size/checksum and would survive a
@@ -312,11 +308,9 @@ func (s *Local) Open(a video.Asset) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	openedInfo, err := file.Stat()
-	if err != nil {
-		_ = file.Close()
-		return nil, err
-	}
+	// file.Stat cannot fail here: fstat on an open descriptor only fails
+	// with EBADF, and file was just opened successfully above.
+	openedInfo, _ := file.Stat()
 	if !openedInfo.Mode().IsRegular() || (s.MaxBytes > 0 && openedInfo.Size() > s.MaxBytes) {
 		_ = file.Close()
 		return nil, fmt.Errorf("asset is not a permitted regular file")

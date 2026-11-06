@@ -48,6 +48,24 @@ type Runtime struct {
 	ledgerCloser io.Closer
 }
 
+// openPostgresStoreFunc and openPostgresLedgerFunc are the PostgreSQL
+// openers used by the postgres backend. They are package variables so
+// tests can exercise the postgres success and failure paths without a
+// live database (the same seam pattern as cryptoRead in
+// internal/secrets).
+var (
+	openPostgresStoreFunc func(context.Context, string) (queue.JobStore, error) = func(ctx context.Context, dsn string) (queue.JobStore, error) {
+		return queue.OpenPostgresStore(ctx, dsn)
+	}
+	openPostgresLedgerFunc func(context.Context, string) (orchestrator.CostLedger, io.Closer, error) = func(ctx context.Context, dsn string) (orchestrator.CostLedger, io.Closer, error) {
+		// A single return covers both outcomes: on error ledger is nil,
+		// so the caller sees (nil, nil, err); on success it sees the
+		// ledger as both the ledger and its closer.
+		ledger, err := cost.OpenPostgresLedger(ctx, dsn)
+		return ledger, ledger, err
+	}
+)
+
 // openJobStore builds the configured job-store backend. The file
 // backend is the default and keeps existing single-host behavior;
 // postgres selects the shared PostgreSQL store for multi-process
@@ -72,7 +90,7 @@ func openJobStore(cfg video.Config, baseDir string) (queue.JobStore, error) {
 		if err != nil {
 			return nil, err
 		}
-		store, err := queue.OpenPostgresStore(context.Background(), dsn)
+		store, err := openPostgresStoreFunc(context.Background(), dsn)
 		if err != nil {
 			return nil, err
 		}
@@ -98,11 +116,11 @@ func openCostLedger(cfg video.Config) (orchestrator.CostLedger, io.Closer, error
 		if err != nil {
 			return nil, nil, err
 		}
-		ledger, err := cost.OpenPostgresLedger(context.Background(), dsn)
+		ledger, closer, err := openPostgresLedgerFunc(context.Background(), dsn)
 		if err != nil {
 			return nil, nil, fmt.Errorf("video cost ledger: %w", err)
 		}
-		return ledger, ledger, nil
+		return ledger, closer, nil
 	default:
 		return nil, nil, fmt.Errorf("video.job_store_backend must be file or postgres, got %q", cfg.JobStoreBackend)
 	}
@@ -286,16 +304,26 @@ func New(cfg video.Config, baseDir string) (*Runtime, error) {
 	return &Runtime{Handler: h, Queue: q, Workers: pool, Store: store, Orchestrator: orch, jobRetention: time.Duration(cfg.JobRetentionDays) * 24 * time.Hour, codeRender: codeRender, codeRenderRetention: codeRenderRetention, ledgerCloser: ledgerCloser}, nil
 }
 
+// osHostname is os.Hostname, exposed as a package variable so tests can
+// exercise the unknown-host fallback (the same seam pattern as getenv
+// in internal/secrets).
+var osHostname = os.Hostname
+
 // instanceID names this process as a video job lease owner:
 // hostname + pid, so an operator reading a job's lease fields
 // can tell which replica holds it.
 func instanceID() string {
-	host, err := os.Hostname()
+	host, err := osHostname()
 	if err != nil || host == "" {
 		host = "unknown-host"
 	}
 	return fmt.Sprintf("%s/%d", host, os.Getpid())
 }
+
+// pruneInterval is the retention sweeper period. It is a package
+// variable so tests can observe the hourly sweep without waiting an
+// hour.
+var pruneInterval = time.Hour
 
 func (r *Runtime) Start(ctx context.Context) error {
 	if r == nil {
@@ -341,7 +369,7 @@ func (r *Runtime) Start(ctx context.Context) error {
 		r.pruneDone = pruneDone
 		go func() {
 			defer close(pruneDone)
-			t := time.NewTicker(time.Hour)
+			t := time.NewTicker(pruneInterval)
 			defer t.Stop()
 			for {
 				select {

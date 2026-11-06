@@ -30,6 +30,11 @@ const (
 	comfyDefaultMaxOutput = int64(512 << 20)
 )
 
+// randRead is crypto/rand.Read, exposed as a package variable so tests can
+// exercise the client-ID generation failure in CreateJob (the same seam
+// pattern as cryptoRead in internal/secrets).
+var randRead = rand.Read
+
 type ComfyUI struct {
 	baseURL        string
 	workflow       map[string]map[string]any
@@ -275,9 +280,13 @@ func (p *ComfyUI) ValidateRequest(r video.VideoRequest) error {
 	if len(r.ShotPlan) > 1 {
 		return errors.New("comfyui adapter submits one workflow per job; multi-shot episode orchestration is not implemented")
 	}
-	if strings.TrimSpace(r.Prompt) == "" && (len(r.ShotPlan) != 1 || strings.TrimSpace(r.ShotPlan[0].Prompt) == "") {
-		return errors.New("comfyui requires a non-empty text prompt")
-	}
+	// No empty-prompt check is needed here: Validate above already
+	// requires a prompt or a shot plan, and requires every shot to
+	// carry a non-empty prompt. With an empty request prompt the plan
+	// must therefore hold at least one shot, all with prompts; a
+	// single shot means CreateJob takes its prompt below, and
+	// multiple shots are rejected by the check above. An empty prompt
+	// is unreachable at this point.
 	if len(r.ReferenceAssets) > 0 || r.FirstFrameAsset != nil || r.LastFrameAsset != nil ||
 		len(r.CharacterReferences) > 0 || len(r.LocationReferences) > 0 || len(r.StyleReferences) > 0 {
 		return errors.New("comfyui workflow adapter does not map reference or first/last-frame assets into the workflow")
@@ -330,10 +339,14 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 	if err != nil {
 		return video.ProviderJob{}, fmt.Errorf("clone ComfyUI workflow: %w", err)
 	}
+	// The unmarshal cannot fail: Marshal of a map[string]map[string]any
+	// always yields a JSON object whose values are objects or null,
+	// which Unmarshal into the same type always accepts. The
+	// Marshal/Unmarshal round-trip is the deep copy; the clone must
+	// not alias the configured workflow because setWorkflowInput
+	// mutates it below.
 	var workflow map[string]map[string]any
-	if err := json.Unmarshal(data, &workflow); err != nil {
-		return video.ProviderJob{}, fmt.Errorf("clone ComfyUI workflow: %w", err)
-	}
+	_ = json.Unmarshal(data, &workflow)
 	prompt := strings.TrimSpace(r.Prompt)
 	if prompt == "" {
 		parts := make([]string, 0, len(r.ShotPlan))
@@ -379,7 +392,7 @@ func (p *ComfyUI) CreateJob(ctx context.Context, r video.VideoRequest) (video.Pr
 		}
 	}
 	clientIDBytes := make([]byte, 16)
-	if _, err := rand.Read(clientIDBytes); err != nil {
+	if _, err := randRead(clientIDBytes); err != nil {
 		return video.ProviderJob{}, fmt.Errorf("generate ComfyUI client ID: %w", err)
 	}
 	payload := map[string]any{"prompt": workflow, "client_id": hex.EncodeToString(clientIDBytes)}

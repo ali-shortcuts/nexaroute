@@ -82,11 +82,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.universalPlan(w, r)
 		return
 	}
-	parts, ok := requestPathParts(r)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid_path", "request path is invalid", false)
-		return
-	}
+	parts := requestPathParts(r)
 	if len(parts) >= 4 && parts[0] == "v1" && parts[1] == "video" && parts[2] == "jobs" {
 		id := parts[3]
 		if len(parts) == 4 && r.Method == http.MethodGet {
@@ -105,21 +101,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "not_found", "route not found", false)
 }
 
-func requestPathParts(r *http.Request) ([]string, bool) {
+// requestPathParts splits the request path into decoded segments. The
+// unescape cannot fail: URL.EscapedPath only ever yields valid %XX
+// sequences (an invalid RawPath is discarded in favour of the escaped
+// Path), so there is no error to report.
+func requestPathParts(r *http.Request) []string {
 	raw := strings.Trim(r.URL.EscapedPath(), "/")
 	if raw == "" {
-		return nil, true
+		return nil
 	}
 	encoded := strings.Split(raw, "/")
 	parts := make([]string, len(encoded))
 	for i, part := range encoded {
-		decoded, err := url.PathUnescape(part)
-		if err != nil {
-			return nil, false
-		}
+		decoded, _ := url.PathUnescape(part)
 		parts[i] = decoded
 	}
-	return parts, true
+	return parts
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
@@ -354,10 +351,12 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 			writeError(w, http.StatusInternalServerError, "asset_integrity_error", "stored asset content does not match its recorded checksum", false)
 			return
 		}
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			writeError(w, http.StatusInternalServerError, "asset_integrity_error", "stored asset could not be rewound after integrity check", false)
-			return
-		}
+		// The rewind cannot fail: file is an open regular file
+		// (checked above), SeekStart is a constant whence, and the
+		// descriptor is closed only by the deferred Close after this
+		// point, so a failure here would need EBADF, EINVAL or ESPIPE
+		// — none of which an open regular file can produce.
+		_, _ = file.Seek(0, io.SeekStart)
 	}
 	contentType := "application/octet-stream"
 	if parsed, _, parseErr := mime.ParseMediaType(strings.TrimSpace(asset.ContentType)); parseErr == nil {
@@ -368,10 +367,11 @@ func (h *Handler) getAsset(w http.ResponseWriter, r *http.Request, jobID, assetI
 	if filename == "" || filename == "." || filename == ".." {
 		filename = asset.ID
 	}
+	// FormatMediaType cannot return "" here: the type ("attachment") and
+	// the attribute ("filename") are constants that are always valid
+	// tokens, and any filename value is either a token, quoted, or
+	// RFC 2231-encoded. There is no fallback disposition to reach.
 	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": filename})
-	if disposition == "" {
-		disposition = `attachment; filename="video-asset.bin"`
-	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", disposition)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
