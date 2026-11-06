@@ -22,6 +22,28 @@ plus `stream_usage` and `auth_failure` (see `internal/providers/livecanary`).
 Steps 1–2 already existed; this document sequences them instead of inventing
 a fourth harness or a new report format.
 
+## v0.25.0 owner-selected provider scope
+
+The release owner selected exactly two live providers for v0.25.0:
+
+- OpenAI direct Chat Completions preset `openai` (`openai_compatible` dialect).
+- Anthropic direct Messages preset `anthropic` (`anthropic_compatible` dialect).
+
+The live acceptance does not include Gemini, AWS Bedrock, Google Vertex AI or Azure OpenAI. Those remain UNVERIFIED for live interoperability. The separate `openai-responses` dialect is not implied by a pass of the OpenAI Chat Completions preset.
+
+For a single exact-SHA evidence artifact covering both providers, use the manual-only workflow `.github/workflows/provider-v025-live-acceptance.yml`. It runs both providers sequentially with separate protected secrets, creates two provider-specific reports and a combined summary, and fails unless all seven acceptance scenarios PASS for both. Dispatch only from the current `main` tip.
+
+Create or use the protected GitHub Actions environment `conformance-live` with these separate environment secrets:
+
+- `NEXAROUTE_OPENAI_API_KEY`
+- `NEXAROUTE_ANTHROPIC_API_KEY`
+
+Restrict environment reviewers to the operator(s) authorized to spend the provider quota. The workflow maps each secret to the canary process environment for that provider only; values are never inputs, command-line arguments, artifacts or reports.
+
+The workflow requires exact enabled model IDs and the current USD input/output price per million tokens for each selected model. Those prices activate the canary's preflight and observed-cost estimate; the default hard ceiling is USD 1.00 per provider run (USD 2.00 maximum across both). Each run is limited to 7 upstream calls, 4,096 estimated input tokens per request, 512 output tokens per request, 30 seconds per call and 3 minutes overall. The workflow requires the estimated and observed cost to remain under the per-provider ceiling.
+
+Do not dispatch the workflow until the operator has explicitly approved the selected model IDs, price inputs and cost ceiling. One successful manual run produces the combined artifact referenced by the structured `NEXAROUTE_ACCEPTANCE_V1` record on issue #646. If `main` moves after evidence collection, the evidence is stale for the new candidate SHA and must be recollected.
+
 ## Operator authorization gate
 
 No live request happens until the operator has, in writing on the issue or
