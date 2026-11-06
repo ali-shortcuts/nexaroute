@@ -49,7 +49,7 @@ func TestCodeRenderSecondMkdirTempFailure(t *testing.T) {
 		t.Skip("the PATH_MAX long-path trigger is Linux-specific")
 	}
 	root := longWorkRoot(t, 4085)
-	p := providers.NewCodeRender(nil, requireRenderStack(t), nil, root, []string{"m"}, 120)
+	p := providers.NewCodeRender(nil, fakeCodeRenderStack(t), nil, root, []string{"m"}, 120)
 	plan, err := agent.ParsePlan(planJSON)
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +69,55 @@ func TestCodeRenderSecondMkdirTempFailure(t *testing.T) {
 	}
 }
 
+// fakeCodeRenderStack supplies deterministic FFmpeg/ffprobe executables so
+// coverage tests exercise CodeRender's failure paths without requiring host
+// multimedia packages. The fake renderer writes outputs but never claims to
+// produce playable media; these tests fail before any asset is published.
+func fakeCodeRenderStack(t *testing.T) *render.Renderer {
+	t.Helper()
+	dir := t.TempDir()
+	ffmpeg := filepath.Join(dir, "ffmpeg")
+	ffprobe := filepath.Join(dir, "ffprobe")
+	font := filepath.Join(dir, "font.ttf")
+	script := `#!/bin/sh
+if [ "$1" = "-version" ]; then
+  echo "ffmpeg test double"; exit 0
+fi
+if [ "$1" = "-hide_banner" ] && [ "$2" = "-encoders" ]; then
+  echo " V..... libx264 test encoder"; exit 0
+fi
+if [ "$1" = "-hide_banner" ] && [ "$2" = "-filters" ]; then
+  echo " T.C drawtext test filter"
+  echo " T.C drawbox test filter"
+  echo " T.C gradients test filter"
+  echo " T.C zoompan test filter"
+  exit 0
+fi
+last=""
+for arg in "$@"; do last="$arg"; done
+if [ "$last" = "-" ]; then
+  printf '\\000\\377'
+  exit 0
+fi
+if [ -z "$last" ]; then
+  echo "missing output argument" >&2
+  exit 2
+fi
+printf "fake-render-output" > "$last"
+`
+	if err := os.WriteFile(ffmpeg, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ffprobe, []byte("#!/bin/sh\\nexit 0\\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(font, []byte("test-font"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NEXAROUTE_FFMPEG", ffmpeg)
+	return &render.Renderer{FFmpeg: ffmpeg, FFprobe: ffprobe, FontFile: font}
+}
+
 // blockingNarrator writes a valid WAV and then leaves a directory where
 // the subtitle file goes, so the subtitle write must fail.
 type blockingNarrator struct{ fakeNarrator }
@@ -82,7 +131,7 @@ func (blockingNarrator) Synthesize(_ context.Context, text, outPath string) erro
 
 func TestCodeRenderSubtitlesWriteFailure(t *testing.T) {
 	a := &agent.Agent{Planner: fakePlanner{out: planJSON}, MaxAttempts: 1}
-	p := providers.NewCodeRender(a, &render.Renderer{}, blockingNarrator{}, t.TempDir(), []string{"deepseek-chat"}, 120)
+	p := providers.NewCodeRender(a, fakeCodeRenderStack(t), blockingNarrator{}, t.TempDir(), []string{"deepseek-chat"}, 120)
 	p.MaxAssetBytes = 512 << 20
 	req := video.VideoRequest{
 		ProjectID: "test", Prompt: "narrated", Mode: video.ModeTextToVideo,
