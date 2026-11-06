@@ -21,9 +21,18 @@ type RotatingWriter struct {
 	backups  int
 	file     *os.File
 	size     int64
+
+	// File operations are injectable per writer so rotation failure paths can
+	// be tested deterministically without privileged mount namespaces.
+	removeFile func(string) error
+	renameFile func(string, string) error
 }
 
 func NewRotatingWriter(path string, maxBytes int64, backups int) (*RotatingWriter, error) {
+	return newRotatingWriterWithFileOps(path, maxBytes, backups, nil, nil)
+}
+
+func newRotatingWriterWithFileOps(path string, maxBytes int64, backups int, removeFile func(string) error, renameFile func(string, string) error) (*RotatingWriter, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, fmt.Errorf("log path is required")
 	}
@@ -33,7 +42,7 @@ func NewRotatingWriter(path string, maxBytes int64, backups int) (*RotatingWrite
 	if backups < 0 {
 		return nil, fmt.Errorf("log backups cannot be negative")
 	}
-	w := &RotatingWriter{path: path, maxBytes: maxBytes, backups: backups}
+	w := &RotatingWriter{path: path, maxBytes: maxBytes, backups: backups, removeFile: removeFile, renameFile: renameFile}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -74,6 +83,20 @@ func (w *RotatingWriter) open() error {
 	return nil
 }
 
+func (w *RotatingWriter) remove(path string) error {
+	if w.removeFile != nil {
+		return w.removeFile(path)
+	}
+	return os.Remove(path)
+}
+
+func (w *RotatingWriter) rename(oldPath, newPath string) error {
+	if w.renameFile != nil {
+		return w.renameFile(oldPath, newPath)
+	}
+	return os.Rename(oldPath, newPath)
+}
+
 func (w *RotatingWriter) cleanupBackups() error {
 	dir := filepath.Dir(w.path)
 	base := filepath.Base(w.path)
@@ -93,7 +116,7 @@ func (w *RotatingWriter) cleanupBackups() error {
 		}
 		if n > w.backups {
 			name := filepath.Join(dir, entry.Name())
-			if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+			if err := w.remove(name); err != nil && !os.IsNotExist(err) {
 				return err
 			}
 		}
@@ -112,22 +135,22 @@ func (w *RotatingWriter) rotateLocked() error {
 		w.file = nil
 	}
 	if w.backups == 0 {
-		if err := os.Remove(w.path); err != nil && !os.IsNotExist(err) {
+		if err := w.remove(w.path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	} else {
 		oldest := fmt.Sprintf("%s.%d", w.path, w.backups)
-		if err := os.Remove(oldest); err != nil && !os.IsNotExist(err) {
+		if err := w.remove(oldest); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		for i := w.backups - 1; i >= 1; i-- {
 			src := fmt.Sprintf("%s.%d", w.path, i)
 			dst := fmt.Sprintf("%s.%d", w.path, i+1)
-			if err := os.Rename(src, dst); err != nil && !os.IsNotExist(err) {
+			if err := w.rename(src, dst); err != nil && !os.IsNotExist(err) {
 				return err
 			}
 		}
-		if err := os.Rename(w.path, w.path+".1"); err != nil && !os.IsNotExist(err) {
+		if err := w.rename(w.path, w.path+".1"); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
