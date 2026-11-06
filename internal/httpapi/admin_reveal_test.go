@@ -83,6 +83,59 @@ func TestRevealSecretReturnsKeyAndGetStaysMasked(t *testing.T) {
 	}
 }
 
+func TestProviderGetRedactsCredentialEnvironmentVariableNames(t *testing.T) {
+	cfg := revealTestConfig()
+	cfg.Providers[0].APIKeyEnv = "NR_PROVIDER_API_KEY_REFERENCE"
+	cfg.Providers[0].SecretKeyEnv = "NR_PROVIDER_SECRET_KEY_REFERENCE"
+	cfg.Providers[0].SessionTokenEnv = "NR_PROVIDER_SESSION_TOKEN_REFERENCE"
+	cfg.Providers[0].Credentials[0].APIKeyEnv = "NR_POOL_API_KEY_REFERENCE"
+
+	s := testGateway(t, cfg)
+	rr := adminRequest(s, http.MethodGet, "/admin/api/providers/p", "")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	for _, name := range []string{
+		"NR_PROVIDER_API_KEY_REFERENCE",
+		"NR_PROVIDER_SECRET_KEY_REFERENCE",
+		"NR_PROVIDER_SESSION_TOKEN_REFERENCE",
+		"NR_POOL_API_KEY_REFERENCE",
+	} {
+		if strings.Contains(rr.Body.String(), name) {
+			t.Fatalf("GET exposed credential environment-variable reference %q: %s", name, rr.Body.String())
+		}
+	}
+
+	got := revealDecode(t, rr)
+	provider, ok := got["provider"].(map[string]any)
+	if !ok {
+		t.Fatalf("provider payload has type %T, want object", got["provider"])
+	}
+	for _, field := range []string{"api_key_env", "secret_key_env", "session_token_env"} {
+		if _, exists := provider[field]; exists {
+			t.Fatalf("provider response contains %q: %s", field, rr.Body.String())
+		}
+	}
+	credentials, ok := provider["credentials"].([]any)
+	if !ok || len(credentials) != 2 {
+		t.Fatalf("provider credentials = %v, want two entries", provider["credentials"])
+	}
+	first, ok := credentials[0].(map[string]any)
+	if !ok {
+		t.Fatalf("first credential has type %T, want object", credentials[0])
+	}
+	if _, exists := first["api_key_env"]; exists {
+		t.Fatalf("pool credential response contains api_key_env: %s", rr.Body.String())
+	}
+	if got["credential_configured"] != true || got["has_secret"] != true {
+		t.Fatalf("masked metadata was lost: credential_configured=%v has_secret=%v", got["credential_configured"], got["has_secret"])
+	}
+	meta, ok := got["credentials_meta"].([]any)
+	if !ok || len(meta) != 2 {
+		t.Fatalf("credentials_meta = %v, want two masked entries", got["credentials_meta"])
+	}
+}
+
 func TestRevealSecretPoolEntriesByIndex(t *testing.T) {
 	s := testGateway(t, revealTestConfig())
 
