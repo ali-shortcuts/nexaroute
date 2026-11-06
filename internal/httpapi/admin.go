@@ -723,11 +723,20 @@ func (s *Server) adminProviderByID(w http.ResponseWriter, r *http.Request) {
 		// Determine if there's a secret to mask (API key, env var, or credentials)
 		hasAPIKeySecret := p.APIKey != "" || p.APIKeyEnv != "" || len(p.Credentials) > 0
 		p.APIKey = ""
+		// Environment-variable references are configuration details for
+		// credential custody. Keep them server-side just like literal
+		// credential values; the masked metadata above is sufficient for
+		// the editor to preserve the existing secret without revealing its
+		// source name.
+		p.APIKeyEnv = ""
+		p.SecretKeyEnv = ""
+		p.SessionTokenEnv = ""
 		p.Headers = nil // custom authorization headers can also contain secrets
 		p.ProxyURL = "" // proxy URLs may contain passwords
 		p.Credentials = append([]config.CredentialConfig(nil), p.Credentials...)
 		for i := range p.Credentials {
 			p.Credentials[i].APIKey = ""
+			p.Credentials[i].APIKeyEnv = ""
 			// Email is metadata but still personal data: only the
 			// masked form ever leaves the server on this surface.
 			p.Credentials[i].Email = providers.MaskEmail(p.Credentials[i].Email)
