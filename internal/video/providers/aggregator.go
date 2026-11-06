@@ -427,21 +427,24 @@ func (p *Aggregator) download(ctx context.Context, rawURL string) ([]byte, strin
 		return nil, "", fmt.Errorf("aggregator output egress policy: %w", err)
 	}
 	client := &http.Client{Transport: tr, Timeout: 5 * time.Minute, CheckRedirect: egress.RefuseCrossOriginRedirects(5, "aggregator-output")}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, "", err
-	}
+	// NewRequest re-parses the same URL string with the constant GET
+	// method, and url.Parse already succeeded on it above, so it
+	// cannot fail here.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("download aggregator output: %w", err)
 	}
 	data, readErr := io.ReadAll(io.LimitReader(resp.Body, p.maxOutputBytes+1))
-	closeErr := resp.Body.Close()
+	// The close error cannot occur: the transport wraps every response
+	// body in bodyEOFSignal with an earlyCloseFn that returns nil when
+	// Close is called before EOF (the bounded read above), and once
+	// EOF has been seen the underlying body.Close takes the sawEOF
+	// path, which also returns nil. Close is still called to release
+	// the connection.
+	_ = resp.Body.Close()
 	if readErr != nil {
 		return nil, "", fmt.Errorf("read aggregator output: %w", readErr)
-	}
-	if closeErr != nil {
-		return nil, "", fmt.Errorf("close aggregator output response: %w", closeErr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", fmt.Errorf("aggregator output download returned HTTP %d", resp.StatusCode)

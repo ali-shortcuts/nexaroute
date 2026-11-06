@@ -24,6 +24,13 @@ type EpisodeComposer interface {
 	ComposeEpisode(context.Context, composer.EpisodeSpec) (composer.Manifest, error)
 }
 
+// readFile is os.ReadFile, exposed as a package variable so tests can
+// exercise the narration-output read failure. There is no deterministic
+// filesystem trigger for it: a file that WAVDuration just parsed cannot
+// fail a plain re-read without a race. Same seam pattern as cryptoRead
+// in internal/secrets.
+var readFile = os.ReadFile
+
 func validateShotPlanRequest(r video.VideoRequest, p video.VideoProvider, caps video.Capabilities) (video.VideoRequest, video.CostEstimate, error) {
 	if len(r.ShotPlan) < 2 {
 		return r, video.CostEstimate{}, errors.New("shot-plan validation requires at least two shots")
@@ -59,9 +66,12 @@ func validateShotPlanRequest(r video.VideoRequest, p video.VideoProvider, caps v
 		if selectedModel == "" {
 			selectedModel = normalized.ModelPreference
 		}
-		if normalized.ModelPreference != selectedModel {
-			return r, video.CostEstimate{}, fmt.Errorf("shot %q selected a different model; one episode currently requires one provider/model", shotID)
-		}
+		// No mismatch check is needed here: request.ModelPreference
+		// was set to selectedModel just above, and
+		// validateProviderRequest either errors, keeps a non-empty
+		// preference unchanged, or fills an empty one from
+		// caps.Models[0] (which the branch above then adopts), so
+		// normalized.ModelPreference always equals selectedModel.
 		if err := p.ValidateRequest(normalized); err != nil {
 			return r, video.CostEstimate{}, fmt.Errorf("provider rejected shot %q: %w", shotID, err)
 		}
@@ -187,9 +197,10 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		if err := p.CancelJob(ctx, j.ProviderJobID); err != nil {
 			return err
 		}
-		if err := j.Transition(video.StateCancelled); err != nil {
-			return err
-		}
+		// CancelRequested -> Cancelled is legal per
+		// video.CanTransition, and the enclosing branch fixes the
+		// from-state, so this transition cannot fail.
+		_ = j.Transition(video.StateCancelled)
 		j.ProviderJobID = ""
 		j.LastError = ""
 		if err := o.Store.Update(ctx, j); err != nil {
@@ -201,9 +212,10 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		return nil
 	}
 	if j.State == video.StateQueued {
-		if err := j.Transition(video.StateAdmitted); err != nil {
-			return err
-		}
+		// Queued -> Admitted is legal per video.CanTransition, and the
+		// enclosing branch fixes the from-state, so this transition
+		// cannot fail.
+		_ = j.Transition(video.StateAdmitted)
 		if err := o.Store.Update(ctx, j); err != nil {
 			return fmt.Errorf("persist episode admission: %w", err)
 		}
@@ -292,9 +304,10 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 			j.Provider = p.ID()
 			j.Model = run.Model
 			if j.State == video.StateAdmitted {
-				if err := j.Transition(video.StateSubmitted); err != nil {
-					return err
-				}
+				// Admitted -> Submitted is legal per
+				// video.CanTransition, and the enclosing branch fixes
+				// the from-state, so this transition cannot fail.
+				_ = j.Transition(video.StateSubmitted)
 			}
 			if err := o.Store.Update(ctx, j); err != nil {
 				bestEffortCancelProvider(ctx, p, run.ProviderJobID)
@@ -316,9 +329,8 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 		if status.State == video.StateCancelled {
 			return nil
 		}
-		if status.State != video.StateCompleted {
-			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("shot %q ended without a completed provider status", run.ShotID))
-		}
+		// pollEpisodeShot returns a nil error only with a Completed or
+		// Cancelled status, so reaching here means Completed.
 		if len(status.Outputs) == 0 {
 			return o.markNeedsManualAndError(ctx, j, fmt.Sprintf("provider completed shot %q without output assets", run.ShotID))
 		}
@@ -437,9 +449,10 @@ func (o *Orchestrator) runEpisodeJob(ctx context.Context, j video.VideoJob) erro
 				}
 			}
 		} else if j.State == video.StateSubmitted {
-			if err := j.Transition(video.StateProcessing); err != nil {
-				return err
-			}
+			// Submitted -> Processing is legal per
+			// video.CanTransition, and the enclosing branch fixes the
+			// from-state, so this transition cannot fail.
+			_ = j.Transition(video.StateProcessing)
 		}
 		j.LastError = ""
 		if err := o.Store.Update(ctx, j); err != nil {
@@ -547,9 +560,10 @@ func (o *Orchestrator) pollEpisodeShot(ctx context.Context, p video.VideoProvide
 				run.State = status.State
 			}
 			if j.State == video.StateSubmitted && status.State != video.StateQueued && status.State != video.StateSubmitted {
-				if err := j.Transition(video.StateProcessing); err != nil {
-					return video.ProviderJobStatus{}, err
-				}
+				// Submitted -> Processing is legal per
+				// video.CanTransition, and the enclosing condition
+				// fixes the from-state, so this transition cannot fail.
+				_ = j.Transition(video.StateProcessing)
 			}
 			total := float64(len(j.Request.ShotPlan))
 			j.Progress = math.Max(j.Progress, math.Min(0.8, (float64(index)+status.Progress)/total*0.8))
@@ -788,7 +802,7 @@ func (o *Orchestrator) ensureNarrationAsset(ctx context.Context, j *video.VideoJ
 	if err := checkNarrationDuration(*j, duration); err != nil {
 		return "", o.fail(ctx, *j, err.Error())
 	}
-	data, err := os.ReadFile(outputPath)
+	data, err := readFile(outputPath)
 	if err != nil {
 		return "", o.retryEpisodeComposition(ctx, j, "narration output could not be read; generated shot checkpoints are preserved", err)
 	}

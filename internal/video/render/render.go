@@ -80,12 +80,18 @@ func (r *Renderer) Preflight(ctx context.Context) error {
 	return nil
 }
 
+// fontCandidates are the system font files tried when neither the
+// configured FontFile nor NEXAROUTE_VIDEO_FONT names a regular file.
+// It is a package variable so tests can exercise the fontconfig
+// fallback without mutating the host font tree.
+var fontCandidates = []string{
+	"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+	"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+	"/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+}
+
 func (r *Renderer) fontSpec() (string, error) {
-	candidates := []string{r.FontFile, os.Getenv("NEXAROUTE_VIDEO_FONT"),
-		"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-		"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-		"/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-	}
+	candidates := append([]string{r.FontFile, os.Getenv("NEXAROUTE_VIDEO_FONT")}, fontCandidates...)
 	for _, c := range candidates {
 		c = strings.TrimSpace(c)
 		if c == "" {

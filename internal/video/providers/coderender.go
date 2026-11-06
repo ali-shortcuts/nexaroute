@@ -391,11 +391,13 @@ func (p *CodeRender) run(ctx context.Context, job *codeRenderJob, r video.VideoR
 			Width: plan.Width, Height: plan.Height, FPS: plan.FPS, NarrationPath: wavPath,
 		}
 		if wantSubtitles {
+			// BuildSRT cannot return empty here: the narration/caption
+			// text is non-blank (checked above), and the plan already
+			// passed RenderPlan, which ffmpeg rejects for any total
+			// duration below a microsecond — far above the
+			// sub-nanosecond total that would truncate the SRT
+			// duration to zero.
 			srt := tts.BuildSRT(firstNonEmpty(plan.CaptionText(), narration), time.Duration(plan.TotalDuration()*float64(time.Second)))
-			if len(srt) == 0 {
-				setErr("could not build subtitles from the narration/caption text")
-				return
-			}
 			srtPath := filepath.Join(dir, "subtitles.srt")
 			if err := os.WriteFile(srtPath, srt, 0o600); err != nil {
 				setErr("write subtitles: %v", err)

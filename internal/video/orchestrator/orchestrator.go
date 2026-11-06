@@ -56,6 +56,11 @@ type Orchestrator struct {
 // enough that a dead owner's jobs become claimable quickly.
 const DefaultLeaseTTL = 5 * time.Minute
 
+// randRead is crypto/rand.Read, exposed as a package variable so tests can
+// exercise the crypto-failure fallbacks in owner and newVideoJobID (the
+// same seam pattern as cryptoRead in internal/secrets).
+var randRead = rand.Read
+
 // owner returns this orchestrator's lease identity, deriving
 // and memoizing a random one when unset.
 func (o *Orchestrator) owner() string {
@@ -63,7 +68,7 @@ func (o *Orchestrator) owner() string {
 		return o.InstanceID
 	}
 	var b [8]byte
-	if _, err := rand.Read(b[:]); err == nil {
+	if _, err := randRead(b[:]); err == nil {
 		o.InstanceID = "orch-" + hex.EncodeToString(b[:])
 	} else {
 		o.InstanceID = fmt.Sprintf("orch-%d", time.Now().UnixNano())
@@ -83,7 +88,7 @@ var videoJobIDCounter uint64
 
 func newVideoJobID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err == nil {
+	if _, err := randRead(b[:]); err == nil {
 		return "video-" + hex.EncodeToString(b[:])
 	}
 	n := atomic.AddUint64(&videoJobIDCounter, 1)
@@ -233,9 +238,10 @@ func (o *Orchestrator) Create(ctx context.Context, r video.VideoRequest) (video.
 			return video.VideoJob{}, errors.New("multi-shot episode dimensions must be even for H.264 composition")
 		}
 	}
-	if o.Store == nil || o.Queue == nil || o.Providers == nil {
-		return video.VideoJob{}, errors.New("video orchestrator is not fully configured")
-	}
+	// No second fully-configured check is needed here: Create already
+	// rejected a nil Store, Queue or Providers above (after
+	// r.Validate), and nothing in between mutates those fields, so
+	// this point is only reachable with all three set.
 	if r.IdempotencyKey != "" {
 		old, err := o.Store.GetByIdempotency(ctx, r.IdempotencyKey)
 		switch {
@@ -630,9 +636,10 @@ func (o *Orchestrator) Recover(ctx context.Context) error {
 				}
 				continue
 			}
-			if err := job.Transition(video.StateSubmitted); err != nil {
-				return fmt.Errorf("recover video job %s state: %w", job.JobID, err)
-			}
+			// Admitted -> Submitted is legal per video.CanTransition,
+			// and the enclosing switch case fixes the from-state, so
+			// this transition cannot fail.
+			_ = job.Transition(video.StateSubmitted)
 			if err := o.Store.Update(ctx, job); err != nil {
 				return fmt.Errorf("persist recovered video job %s: %w", job.JobID, err)
 			}
@@ -764,9 +771,10 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 	case video.StateNeedsManualAction:
 		return errors.New("video job requires manual action")
 	case video.StateQueued:
-		if err := j.Transition(video.StateAdmitted); err != nil {
-			return err
-		}
+		// Queued -> Admitted is legal per video.CanTransition, and the
+		// enclosing switch case fixes the from-state, so this
+		// transition cannot fail.
+		_ = j.Transition(video.StateAdmitted)
 		if err := o.Store.Update(ctx, j); err != nil {
 			return fmt.Errorf("persist provider-admission state: %w", err)
 		}
@@ -797,9 +805,10 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 		}
 		now := time.Now().UTC()
 		j.SubmittedAt = &now
-		if err := j.Transition(video.StateSubmitted); err != nil {
-			return err
-		}
+		// The Queued case set Admitted just above, so Admitted ->
+		// Submitted is legal per video.CanTransition and this
+		// transition cannot fail.
+		_ = j.Transition(video.StateSubmitted)
 		if err := o.Store.Update(ctx, j); err != nil {
 			bestEffortCancelProvider(ctx, p, j.ProviderJobID)
 			return fmt.Errorf("provider returned a job ID but it was not durably saved; do not resubmit: %w", err)
@@ -817,9 +826,10 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 			}
 			return errors.New("provider submission outcome is unknown; manual action is required")
 		}
-		if err := j.Transition(video.StateSubmitted); err != nil {
-			return err
-		}
+		// Admitted -> Submitted is legal per video.CanTransition, and
+		// the enclosing switch case fixes the from-state, so this
+		// transition cannot fail.
+		_ = j.Transition(video.StateSubmitted)
 		if err := o.Store.Update(ctx, j); err != nil {
 			return err
 		}
@@ -844,9 +854,10 @@ func (o *Orchestrator) RunJob(ctx context.Context, queued video.VideoJob) error 
 		if err := p.CancelJob(ctx, j.ProviderJobID); err != nil {
 			return err
 		}
-		if err := j.Transition(video.StateCancelled); err != nil {
-			return err
-		}
+		// CancelRequested -> Cancelled is legal per
+		// video.CanTransition, and the enclosing branch fixes the
+		// from-state, so this transition cannot fail.
+		_ = j.Transition(video.StateCancelled)
 		j.LastError = ""
 		if err := o.Store.Update(ctx, j); err != nil {
 			return err

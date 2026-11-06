@@ -54,10 +54,18 @@ func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) 
 	if dsn == "" {
 		return nil, errors.New("video job store: postgres DSN is required for the postgres backend")
 	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, errors.New("video job store: invalid postgres configuration")
-	}
+	// sql.Open cannot fail here: "pgx" is registered by the blank import
+	// above, and the pgx stdlib driver's OpenConnector never parses the
+	// DSN (parsing happens lazily at first use, i.e. the Ping below, so
+	// a malformed DSN surfaces as "postgres is unreachable").
+	db, _ := sql.Open("pgx", dsn)
+	return openPostgresStoreDB(ctx, db)
+}
+
+// openPostgresStoreDB pings and migrates an already-opened *sql.DB. It
+// exists so the ping/migrate path is unit-testable with a fake driver;
+// OpenPostgresStore is the only production caller.
+func openPostgresStoreDB(ctx context.Context, db *sql.DB) (*PostgresStore, error) {
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(2)
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)

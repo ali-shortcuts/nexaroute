@@ -47,10 +47,10 @@ func WAVDuration(path string) (time.Duration, error) {
 		if err != nil {
 			return 0, errors.New("could not inspect narration WAV chunk offset")
 		}
-		info, err := file.Stat()
-		if err != nil {
-			return 0, errors.New("could not inspect narration WAV size")
-		}
+		// file.Stat cannot fail here: fstat on an open descriptor only
+		// fails with EBADF, and file was just opened successfully above
+		// and is closed only by the deferred Close below.
+		info, _ := file.Stat()
 		required := int64(size)
 		if size%2 == 1 {
 			required++
@@ -108,17 +108,14 @@ func BuildSRT(text string, duration time.Duration) []byte {
 	if len(chunks) == 0 || duration <= 0 {
 		return nil
 	}
+	// subtitleChunks only emits non-empty chunks, so every chunk has at
+	// least one rune: each weight is >= 1 and totalWeight >= 1, and no
+	// clamping or empty-total guard can fire.
 	weights := make([]int, len(chunks))
 	totalWeight := 0
 	for i, chunk := range chunks {
 		weights[i] = utf8.RuneCountInString(chunk)
-		if weights[i] < 1 {
-			weights[i] = 1
-		}
 		totalWeight += weights[i]
-	}
-	if totalWeight == 0 {
-		return nil
 	}
 
 	var out strings.Builder

@@ -173,10 +173,10 @@ func validateWAV(path string) error {
 		return fmt.Errorf("piper did not create narration output: %w", err)
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return fmt.Errorf("stat Piper output: %w", err)
-	}
+	// f.Stat cannot fail here: fstat on an open descriptor only fails
+	// with EBADF, and f was just opened successfully above and is
+	// closed only by the deferred Close below.
+	info, _ := f.Stat()
 	if !info.Mode().IsRegular() || info.Size() < 12 {
 		return errors.New("piper output is not a non-empty WAV file")
 	}

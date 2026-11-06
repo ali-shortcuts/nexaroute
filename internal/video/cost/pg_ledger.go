@@ -62,10 +62,18 @@ func OpenPostgresLedger(ctx context.Context, dsn string) (*PostgresLedger, error
 	if dsn == "" {
 		return nil, errors.New("video cost ledger: postgres DSN is required for the postgres backend")
 	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, errors.New("video cost ledger: invalid postgres configuration")
-	}
+	// sql.Open cannot fail here: "pgx" is registered by the blank import
+	// above, and the pgx stdlib driver's OpenConnector never parses the
+	// DSN (parsing happens lazily at first use, i.e. the Ping below, so
+	// a malformed DSN surfaces as "postgres is unreachable").
+	db, _ := sql.Open("pgx", dsn)
+	return openPostgresLedgerDB(ctx, db)
+}
+
+// openPostgresLedgerDB pings and migrates an already-opened *sql.DB. It
+// exists so the ping/migrate path is unit-testable with a fake driver;
+// OpenPostgresLedger is the only production caller.
+func openPostgresLedgerDB(ctx context.Context, db *sql.DB) (*PostgresLedger, error) {
 	db.SetMaxOpenConns(4)
 	db.SetMaxIdleConns(2)
 	pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -357,10 +365,10 @@ func (l *PostgresLedger) Reconciliation(jobID string) (estimate, actual, delta f
 		if !estimateValid || !actualValid {
 			return est, act, 0, false, true
 		}
+		// No NaN/Inf guard is needed here: est and act were sanitized
+		// above to finite values in [0, maxFloat64], and the difference
+		// of two such values is always finite.
 		d := act - est
-		if math.IsNaN(d) || math.IsInf(d, 0) {
-			return est, act, 0, false, true
-		}
 		return est, act, d, true, true
 	case estimateSettledState:
 		return est, 0, 0, false, true

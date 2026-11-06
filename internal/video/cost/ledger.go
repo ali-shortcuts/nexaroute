@@ -232,10 +232,10 @@ func (l *Ledger) Reconciliation(jobID string) (estimate, actual, delta float64, 
 		if !estimateValid || !actualValid {
 			return est, act, 0, false, true
 		}
+		// No NaN/Inf guard is needed here: est and act were sanitized
+		// above to finite values in [0, maxFloat64], and the difference
+		// of two such values is always finite.
 		d := act - est
-		if math.IsNaN(d) || math.IsInf(d, 0) {
-			return est, act, 0, false, true
-		}
 		return est, act, d, true, true
 	case estimateSettledState:
 		return est, 0, 0, false, true

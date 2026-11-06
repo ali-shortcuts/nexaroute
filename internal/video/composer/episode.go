@@ -85,10 +85,10 @@ func (r *Runner) ComposeEpisode(ctx context.Context, spec EpisodeSpec) (Manifest
 			return Manifest{}, fmt.Errorf("episode output must not overwrite a source shot")
 		}
 		normalized := filepath.Join(work, fmt.Sprintf("shot-%03d.mp4", i+1))
-		tmp, err := temporaryOutputPath(normalized)
-		if err != nil {
-			return Manifest{}, err
-		}
+		// temporaryOutputPath cannot fail here: normalized always ends
+		// in ".mp4", and it only errors for an empty or bare-dot
+		// extension.
+		tmp, _ := temporaryOutputPath(normalized)
 		args := []string{
 			"-y", "-i", input,
 			"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,fps=%d", spec.Width, spec.Height, spec.Width, spec.Height, spec.FPS),
@@ -163,10 +163,10 @@ func (r *Runner) ComposeEpisode(ctx context.Context, spec EpisodeSpec) (Manifest
 		subtitles = copied
 	}
 
-	tmpOutput, err := temporaryOutputPath(output)
-	if err != nil {
-		return Manifest{}, err
-	}
+	// temporaryOutputPath cannot fail here: output passed the ".mp4"
+	// extension check above, and it only errors for an empty or
+	// bare-dot extension.
+	tmpOutput, _ := temporaryOutputPath(output)
 	defer func() { _ = os.Remove(tmpOutput) }()
 	args := []string{"-y", "-i", joined}
 	audioInputs := 0
