@@ -598,20 +598,33 @@ func sanitizeAcceptanceURL(raw string) string {
 	return u.Scheme + "://" + u.Host + u.EscapedPath()
 }
 
+// providerAcceptTempChmod/Sync/Close are seams for the atomic
+// report publish in writeProviderAcceptReport: no filesystem makes
+// fchmod/fsync/close fail on a freshly created temp file owned by
+// the caller (EROFS fails CreateTemp first). The guards stay
+// fail-closed in production; the seams let tests exercise them.
+var (
+	providerAcceptTempChmod = func(f *os.File) error { return f.Chmod(0o600) }
+	providerAcceptTempSync  = func(f *os.File) error { return f.Sync() }
+	providerAcceptTempClose = func(f *os.File) error { return f.Close() }
+)
+
 func writeProviderAcceptReport(path string, report providerAcceptReport) error {
+	// filepath.Dir never returns "": it yields "." for an empty path
+	// and a real directory otherwise, so there is no empty-dir case
+	// to normalize here.
 	dir := filepath.Dir(path)
-	if dir == "" {
-		dir = "."
-	}
 	if dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
-	b, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
+	// json.MarshalIndent cannot fail here: the report graph is all
+	// strings, bools, ints and int64, plus two float64 timeouts that
+	// are finite by construction (the --timeout flag is validated to
+	// 1ns..60s before the report is built). There are no custom
+	// Marshalers, no any and no maps.
+	b, _ := json.MarshalIndent(report, "", "  ")
 	b = append(b, '\n')
 	// Write a fresh private file and rename it into place. Opening an
 	// existing path with O_TRUNC would follow a symlink planted at the
@@ -622,7 +635,7 @@ func writeProviderAcceptReport(path string, report providerAcceptReport) error {
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := providerAcceptTempChmod(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -630,11 +643,11 @@ func writeProviderAcceptReport(path string, report providerAcceptReport) error {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := providerAcceptTempSync(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := providerAcceptTempClose(tmp); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

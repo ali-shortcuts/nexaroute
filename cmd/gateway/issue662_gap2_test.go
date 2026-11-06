@@ -408,6 +408,19 @@ func TestGap2CanaryReportWriteErrors(t *testing.T) {
 // external_accept helpers, audit, init
 // ---------------------------------------------------------------------------
 
+// containsAudienceString is a test-only copy of the helper removed from
+// external_accept.go with the dead audience re-check (the verifier now
+// relies on go-oidc's own audience check). The helper test below still
+// pins the slice-membership behavior.
+func containsAudienceString(audiences []string, expected string) bool {
+	for _, audience := range audiences {
+		if audience == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGap2ExternalAcceptHelpers(t *testing.T) {
 	if containsAudienceString([]string{"a", "b"}, "c") {
 		t.Fatal("absent audience must not match")

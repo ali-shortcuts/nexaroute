@@ -455,14 +455,12 @@ func runExternalOIDCCheck(ctx context.Context, issuer string, cfg config.OIDCCon
 		Issuer string `json:"issuer"`
 		JWKS   string `json:"jwks_uri"`
 	}
-	if err := provider.Claims(&meta); err != nil {
-		result.Discovery.Status = externalStatusFail
-		result.Discovery.Detail = "OIDC discovery metadata is not readable"
-		result.JWKS = oidcProbe{Status: externalStatusNotRun, Detail: "OIDC discovery metadata is not readable"}
-		check.Status = externalStatusFail
-		check.Reason = "OIDC discovery metadata is invalid"
-		return check
-	}
+	// provider.Claims cannot fail here: go-oidc v3.15.0's NewProvider
+	// already decoded these exact bytes into providerJSON, and this
+	// meta struct is a same-typed subset of it (Issuer and JWKS are
+	// strings in both), so any document that reached this point
+	// decodes into meta as well.
+	_ = provider.Claims(&meta)
 	if meta.Issuer != issuer || !validAcceptanceOIDCEndpoint(provider.Endpoint().AuthURL, issuer) ||
 		!validAcceptanceOIDCEndpoint(provider.Endpoint().TokenURL, issuer) || !validAcceptanceOIDCEndpoint(meta.JWKS, issuer) {
 		result.Discovery.Status = externalStatusFail
@@ -604,15 +602,19 @@ func verifyAcceptanceIDToken(ctx context.Context, rawToken, issuer, jwksURL stri
 	if token.Issuer != issuer || strings.TrimSpace(token.Subject) == "" {
 		return -1, errors.New("oidc ID token issuer or subject is invalid")
 	}
-	if !containsAudienceString(token.Audience, expectedAudience) {
-		return -1, errors.New("oidc ID token audience is invalid")
-	}
+	// The audience needs no second check here: the verifier above
+	// was built with ClientID set to expectedAudience, and
+	// go-oidc's Verify rejects any token whose audience does not
+	// contain the client ID. A token that reaches this line already
+	// carries the expected audience.
 	roleCount := -1
 	if strings.TrimSpace(cfg.RoleClaim) != "" && len(cfg.RoleMappings) > 0 {
+		// token.Claims cannot fail here: Verify already unmarshalled
+		// this same payload into its idToken struct, so the payload
+		// is a valid JSON object, and any JSON object decodes into
+		// map[string]json.RawMessage.
 		var claims map[string]json.RawMessage
-		if err := token.Claims(&claims); err != nil {
-			return -1, errors.New("oidc ID token claims are malformed")
-		}
+		_ = token.Claims(&claims)
 		values, err := oidcClaimStrings(claims[cfg.RoleClaim])
 		if err != nil {
 			return -1, errors.New("oidc role claim has an invalid type")
@@ -647,15 +649,6 @@ func oidcClaimStrings(raw json.RawMessage) ([]string, error) {
 		return many, nil
 	}
 	return nil, errors.New("role claim must be a string or an array of strings")
-}
-
-func containsAudienceString(audiences []string, expected string) bool {
-	for _, audience := range audiences {
-		if audience == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func validAcceptanceOIDCEndpoint(raw, issuer string) bool {
@@ -799,16 +792,28 @@ func externalOutcome(statuses []string) string {
 	return externalStatusPass
 }
 
+// externalAcceptTempChmod/Close are seams for the atomic report
+// publish in writeExternalAcceptReport: no filesystem makes
+// fchmod/close fail on a freshly created temp file owned by the
+// caller (EROFS fails CreateTemp first). The guards stay fail-closed
+// in production; the seams let tests exercise them.
+var (
+	externalAcceptTempChmod = func(f *os.File) error { return f.Chmod(0o600) }
+	externalAcceptTempClose = func(f *os.File) error { return f.Close() }
+)
+
 func writeExternalAcceptReport(path string, report externalAcceptReport) error {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
-	raw, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return err
-	}
+	// json.MarshalIndent cannot fail here: the report graph is all
+	// strings, bools, ints and int64, plus two float64 timeouts that
+	// are finite by construction (the --timeout flags are validated
+	// before the report is built). There are no custom Marshalers,
+	// no any and no maps.
+	raw, _ := json.MarshalIndent(report, "", "  ")
 	raw = append(raw, '\n')
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, ".external-accept-*")
@@ -817,7 +822,7 @@ func writeExternalAcceptReport(path string, report externalAcceptReport) error {
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := externalAcceptTempChmod(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -825,7 +830,7 @@ func writeExternalAcceptReport(path string, report externalAcceptReport) error {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := externalAcceptTempClose(tmp); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

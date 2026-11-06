@@ -70,10 +70,11 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	reader := bufio.NewReader(stdin)
-	ask := func(flagName, prompt, def string, current string) string {
-		if o.provided[flagName] {
-			return current
-		}
+	// ask prompts for a value only when its flag was not provided (each
+	// call site is guarded by !o.provided[...]); the provided-flag
+	// early return that used to live here was unreachable, so ask
+	// takes only the prompt and the default.
+	ask := func(prompt, def string) string {
 		fmt.Fprintf(stdout, "%s [%s]: ", prompt, def)
 		line, _ := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
@@ -91,7 +92,7 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		case "gemini":
 			def = "https://generativelanguage.googleapis.com"
 		}
-		o.baseURL = ask("base-url", "Provider base URL", def, o.baseURL)
+		o.baseURL = ask("Provider base URL", def)
 	}
 	if !o.provided["api-key-env"] {
 		def := "OPENAI_API_KEY"
@@ -101,7 +102,7 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		case "gemini":
 			def = "GEMINI_API_KEY"
 		}
-		o.apiKeyEnv = ask("api-key-env", "Env var NAME holding the API key (blank = none)", def, o.apiKeyEnv)
+		o.apiKeyEnv = ask("Env var NAME holding the API key (blank = none)", def)
 	}
 	if !o.provided["model"] {
 		def := "gpt-4o-mini"
@@ -111,10 +112,10 @@ func runInit(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		case "gemini":
 			def = "gemini-2.5-flash"
 		}
-		o.model = ask("model", "Model to enable", def, o.model)
+		o.model = ask("Model to enable", def)
 	}
 	if !o.provided["listen"] {
-		o.listen = ask("listen", "Listen address", o.listen, o.listen)
+		o.listen = ask("Listen address", o.listen)
 	}
 
 	cfg := config.Default()

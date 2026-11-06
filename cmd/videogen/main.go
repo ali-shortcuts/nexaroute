@@ -24,6 +24,10 @@ type renderManifest struct {
 
 var version = "dev"
 
+// osExit is a seam so main's exit-code paths can be tested without killing
+// the test process. Production behaviour is unchanged: it calls os.Exit.
+var osExit = os.Exit
+
 func main() {
 	if len(os.Args) == 2 && (os.Args[1] == "-version" || os.Args[1] == "--version") {
 		fmt.Println("NexaRoute videogen v" + version)
@@ -31,10 +35,11 @@ func main() {
 	}
 	if len(os.Args) < 2 {
 		printUsage(os.Stderr)
-		os.Exit(2)
+		osExit(2)
+		return
 	}
 	if code := run(os.Args[1:], os.Stdout, os.Stderr); code != 0 {
-		os.Exit(code)
+		osExit(code)
 	}
 }
 

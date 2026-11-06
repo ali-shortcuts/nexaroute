@@ -362,7 +362,7 @@ func writeCanaryReport(path string, raw []byte) error {
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := canaryTempChmod(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -370,11 +370,17 @@ func writeCanaryReport(path string, raw []byte) error {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := canaryTempClose(tmp); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)
 }
+
+// canaryTempChmod/canaryTempClose are seams so writeCanaryReport's
+// chmod/close failure paths can be tested: no filesystem makes
+// fchmod or close fail on a freshly created temp file.
+var canaryTempChmod = func(f *os.File) error { return f.Chmod(0o600) }
+var canaryTempClose = func(f *os.File) error { return f.Close() }
 
 func canaryExitCode(outcome string) int {
 	switch outcome {

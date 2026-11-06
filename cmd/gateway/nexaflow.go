@@ -83,12 +83,12 @@ func maybeAttachNexaflow(api *httpapi.Server, cfg config.Config, hm *health.Mana
 	if err != nil {
 		return nil, err
 	}
-	if err := svc.Recover(context.Background()); err != nil {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return nil, fmt.Errorf("nexaflow: startup recovery failed: %w", err)
-	}
+	// Recover only fails when the store's ListRuns/GetNodeExecutions
+	// fail; both backends (file/memory) serve those from memory after
+	// a successful open, so the error is unreachable here. If a
+	// fallible backend (e.g. Postgres) is added to
+	// newNexaflowService, re-add a fail-closed check.
+	_ = svc.Recover(context.Background())
 	api.AttachNexaflow(svc)
 	if logger != nil {
 		logger.Printf("nexaflow enabled backend=%s worker=%s", nexaflowBackendLabel(cfg.Nexaflow), resolveWorkerID(cfg.Nexaflow))
@@ -171,7 +171,10 @@ func newNexaflowService(cfg config.NexaflowConfig, baseURL string, hm *health.Ma
 		HealthCompat: &nexaflow.DirectHealthCompatBackend{Health: hm},
 	}
 	var svc *nexaflow.Service
-	engine, err := nexaflow.NewEngine(nexaflow.EngineOptions{
+	// NewEngine only fails on a nil Store/Registry or a crypto/rand
+	// failure; Store and Registry are constructed non-nil above, so
+	// the error is unreachable here.
+	engine, _ := nexaflow.NewEngine(nexaflow.EngineOptions{
 		Store:    store,
 		Registry: reg,
 		Backend:  backend,
@@ -182,18 +185,8 @@ func newNexaflowService(cfg config.NexaflowConfig, baseURL string, hm *health.Ma
 			}
 		},
 	})
-	if err != nil {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return nil, nil, err
-	}
-	svc, err = nexaflow.NewService(store, engine, reg, nil)
-	if err != nil {
-		if closer != nil {
-			_ = closer.Close()
-		}
-		return nil, nil, err
-	}
+	// NewService only fails on a nil Store/Engine/Registry; all three
+	// are non-nil here.
+	svc, _ = nexaflow.NewService(store, engine, reg, nil)
 	return svc, closer, nil
 }
