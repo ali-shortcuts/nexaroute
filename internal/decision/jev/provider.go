@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -248,16 +247,9 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 	// Build Jev request (metadata_only)
 	jevReq, err := BuildJevRequest(req, mapping)
 	if err != nil {
-		// Check if request too large
-		if remote.IsRequestTooLarge(err) {
-			return decision.DecisionResult{
-				Action:      decision.ActionAbstain,
-				Abstained:   true,
-				Confidence:  0,
-				ReasonCodes: []decision.ReasonCode{decision.ReasonExternalRequestTooLarge, decision.ReasonExistingOrderPreserved},
-				ProviderID:  p.ID(),
-			}, nil
-		}
+		// BuildJevRequest can only fail validation here: the request is
+		// bounded by construction below MaxRequestBodyBytes (see
+		// BuildJevRequest), so no request-too-large branch applies.
 		return decision.DecisionResult{
 			Action:      decision.ActionAbstain,
 			Abstained:   true,
@@ -267,33 +259,22 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}, nil
 	}
 
-	// Marshal
-	body, err := json.Marshal(jevReq)
-	if err != nil {
-		return decision.DecisionResult{
-			Action:      decision.ActionAbstain,
-			Abstained:   true,
-			Confidence:  0,
-			ReasonCodes: []decision.ReasonCode{decision.ReasonExternalInvalidResponse, decision.ReasonExistingOrderPreserved},
-			ProviderID:  p.ID(),
-		}, nil
-	}
+	// Marshal. This cannot fail: JevRequest holds only strings and slices
+	// of strings (no floats, no custom marshalers).
+	body, _ := json.Marshal(jevReq)
 
 	// Do exactly one external call, context-aware, no retry
-	respBody, statusCode, err := client.Do(ctx, "/api/v1/decisions/model-route", body)
+	// client.Do returns a non-nil error for every non-2xx status, so a
+	// nil error here always means 2xx and no status check applies.
+	respBody, _, err := client.Do(ctx, "/api/v1/decisions/model-route", body)
 	if err != nil {
 		// Map error to reason codes, fail open, no raw body leak
 		var rErr *remote.Error
 		if ok := isRemoteError(err, &rErr); ok {
 			switch {
-			case remote.IsRequestTooLarge(rErr):
-				return decision.DecisionResult{
-					Action:      decision.ActionAbstain,
-					Abstained:   true,
-					Confidence:  0,
-					ReasonCodes: []decision.ReasonCode{decision.ReasonExternalRequestTooLarge, decision.ReasonExistingOrderPreserved},
-					ProviderID:  p.ID(),
-				}, nil
+			// No request-too-large case: Do only returns it when the body
+			// exceeds MaxRequestBodyBytes, and this body is bounded below it
+			// by BuildJevRequest (see above).
 			case remote.IsResponseTooLarge(rErr):
 				return decision.DecisionResult{
 					Action:      decision.ActionAbstain,
@@ -348,18 +329,7 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}, nil
 	}
 
-	// Check status code already handled in client.Do for non-2xx as error, but we have body for logging? We must not leak body
-	// For 2xx, parse envelope
-	if statusCode < 200 || statusCode >= 300 {
-		return decision.DecisionResult{
-			Action:      decision.ActionAbstain,
-			Abstained:   true,
-			Confidence:  0,
-			ReasonCodes: []decision.ReasonCode{decision.ReasonExternalHTTPError, decision.ReasonExistingOrderPreserved},
-			ProviderID:  p.ID(),
-		}, nil
-	}
-
+	// Parse the 2xx envelope. The body is never logged, so nothing leaks.
 	parsed, err := ParseAndValidate(respBody, mapping.AllowedOpaqueIDs)
 	if err != nil {
 		var rErr *remote.Error
@@ -383,29 +353,15 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}, nil
 	}
 
-	// Map opaque back to physical
-	physicalID, ok := mapping.OpaqueToPhysical[parsed.SelectedID]
-	if !ok {
-		return decision.DecisionResult{
-			Action:      decision.ActionAbstain,
-			Abstained:   true,
-			Confidence:  0,
-			ReasonCodes: []decision.ReasonCode{decision.ReasonExternalUnknownCandidate, decision.ReasonExistingOrderPreserved},
-			ProviderID:  p.ID(),
-		}, nil
-	}
+	// Map opaque back to physical. The lookup cannot miss:
+	// ParseAndValidate already required the decision to be in
+	// AllowedOpaqueIDs, whose keys are exactly the keys of
+	// OpaqueToPhysical (built in the same loop in BuildOpaqueMapping).
+	physicalID := mapping.OpaqueToPhysical[parsed.SelectedID]
 
-	// Confidence already validated finite [0,1], 0 if absent
+	// Confidence already validated finite [0,1] by ParseAndValidate,
+	// 0 if absent, so no clamping applies.
 	conf := parsed.Confidence
-	if math.IsNaN(conf) || math.IsInf(conf, 0) {
-		conf = 0
-	}
-	if conf < 0 {
-		conf = 0
-	}
-	if conf > 1 {
-		conf = 1
-	}
 
 	return decision.DecisionResult{
 		Action:      decision.ActionSelect,

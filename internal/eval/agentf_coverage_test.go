@@ -177,3 +177,23 @@ func TestAgentFLoadSuitesUnreadablePackInDir(t *testing.T) {
 		t.Fatalf("error = %q, want suite-pack error", err.Error())
 	}
 }
+
+// TestAgentFLoadSuitesUnreadableDir verifies a directory that cannot be
+// listed fails the whole load. As root, permission bits do not apply, so
+// this branch is only exercisable by a non-root user (e.g. CI runners);
+// the same root-skip pattern is used elsewhere in the repo.
+func TestAgentFLoadSuitesUnreadableDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("unreadable-directory branch requires a non-root user")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatalf("chmod dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if _, err := LoadSuitesFromPath(dir); err == nil {
+		t.Fatal("unreadable directory must fail")
+	} else if !strings.Contains(err.Error(), "evaluation suites directory") {
+		t.Fatalf("error = %q, want evaluation-suites-directory error", err.Error())
+	}
+}

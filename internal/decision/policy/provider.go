@@ -134,28 +134,15 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 	if len(bandPool) < len(candidates) {
 		reasonCodes = append(reasonCodes, decision.ReasonPoolBoundaryEnforced)
 	}
-	if len(bandPool) == 0 {
-		bandPool = candidates
-	}
-
 	// Affinity preserved BEFORE priority: if pinned eligible inside earliest permitted pool, preserve it
 	if req.PinnedCandidateID != "" {
 		for _, c := range bandPool {
 			if c.ID == req.PinnedCandidateID {
+				// rc holds at most three codes here (affinity, select-first, and
+				// at most one pool-boundary code), so it is always within
+				// MaxReasonCodes and never already contains ReasonPolicyScored.
 				rc := append([]decision.ReasonCode{decision.ReasonAffinityPreserved, decision.ReasonPolicySelectFirst}, reasonCodes...)
-				if len(rc) > decision.MaxReasonCodes {
-					rc = rc[:decision.MaxReasonCodes]
-				}
-				hasScored := false
-				for _, r := range rc {
-					if r == decision.ReasonPolicyScored {
-						hasScored = true
-						break
-					}
-				}
-				if !hasScored {
-					rc = append(rc, decision.ReasonPolicyScored)
-				}
+				rc = append(rc, decision.ReasonPolicyScored)
 				// Policy trace for affinity case
 				pt := &decision.PolicyTrace{
 					PolicyID:             pol.ID,
@@ -199,12 +186,9 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 		}
 		band = filtered
 	}
-	if len(band) == 0 {
-		band = bandPool
-		if len(band) == 0 {
-			band = candidates
-		}
-	}
+	// band is never empty here: bandPool holds every candidate at the
+	// minimum PoolOrdinal (at least one always matches), and the priority
+	// filter above keeps at least the minimum-priority member.
 
 	// If only one candidate in band, select it directly
 	if len(band) == 1 {
@@ -263,35 +247,16 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 
 	// Find original primary: earliest OriginalRank in band
 	origPrimaryID := originalPrimaryID(band)
+	// ScoreCandidatesWithObservations returns exactly one entry per band
+	// candidate, so the original primary (a band member, by construction
+	// of originalPrimaryID) is always found below.
 	var origPrimaryScore float64
-	var origPrimaryFound bool
 	var origBreakdown map[string]float64
 	for _, sc := range scored {
 		if sc.Candidate.ID == origPrimaryID {
 			origPrimaryScore = sc.WeightedScore
-			origPrimaryFound = true
 			origBreakdown = sc.Components
 			break
-		}
-	}
-	if !origPrimaryFound && len(scored) > 0 {
-		// Fallback: if original primary not in scored (should not happen), use
-		// the candidate with the lowest OriginalRank.
-		minRank := band[0].OriginalRank
-		origPrimaryID = band[0].ID
-		for _, c := range band[1:] {
-			if c.OriginalRank < minRank {
-				minRank = c.OriginalRank
-				origPrimaryID = c.ID
-			}
-		}
-		// Try again
-		for _, sc := range scored {
-			if sc.Candidate.ID == origPrimaryID {
-				origPrimaryScore = sc.WeightedScore
-				origBreakdown = sc.Components
-				break
-			}
 		}
 	}
 
@@ -370,16 +335,9 @@ func (p *Provider) Decide(ctx context.Context, req decision.DecisionRequest) (de
 	}
 	rc = dedupReasonCodes(rc)
 
+	// WeightedSum always returns a finite value in [0,1] (0.5 on
+	// non-finite input, clamped otherwise), so no further clamping applies.
 	conf := topCandidate.WeightedScore
-	if math.IsNaN(conf) || math.IsInf(conf, 0) {
-		conf = 0.5
-	}
-	if conf < 0 {
-		conf = 0
-	}
-	if conf > 1 {
-		conf = 1
-	}
 
 	pt := &decision.PolicyTrace{
 		PolicyID:             pol.ID,

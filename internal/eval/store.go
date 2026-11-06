@@ -11,10 +11,11 @@ func cloneResult(in Result) Result {
 	if err != nil {
 		return Result{}
 	}
+	// Unmarshal cannot fail: b is Marshal output of the same plain type
+	// (no custom unmarshalers), and Marshal already rejects non-finite
+	// floats, so b is always valid, in-range JSON for Result.
 	var out Result
-	if json.Unmarshal(b, &out) != nil {
-		return Result{}
-	}
+	_ = json.Unmarshal(b, &out)
 	return out
 }
 

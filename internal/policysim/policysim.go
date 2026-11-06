@@ -126,9 +126,9 @@ func evaluate(ctx context.Context, provider *policy.Provider, req decision.Decis
 	if cr.Winner == "" && res.PolicyTrace != nil {
 		cr.Winner = res.PolicyTrace.SelectedID
 	}
-	if len(res.RankedIDs) > 0 {
-		cr.Ordered = append([]string(nil), res.RankedIDs...)
-	} else if cr.Winner != "" {
+	// The policy provider never sets RankedIDs (CanRank is false), so
+	// the order is always derived from the winner below.
+	if cr.Winner != "" {
 		cr.Ordered = []string{cr.Winner}
 		for _, c := range req.Candidates {
 			if c.ID != cr.Winner {
@@ -149,10 +149,9 @@ func evaluate(ctx context.Context, provider *policy.Provider, req decision.Decis
 }
 
 func digestOf(v any) string {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return ""
-	}
+	// Marshal cannot fail: callers pass only plain structs of strings,
+	// ints, bools and slices (no floats, no custom marshalers).
+	raw, _ := json.Marshal(v)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }

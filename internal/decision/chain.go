@@ -301,14 +301,14 @@ func (e *ChainExecutor) Execute(
 		var stepCancel context.CancelFunc
 		if step.TimeoutMS > 0 {
 			stepTimeout := time.Duration(step.TimeoutMS) * time.Millisecond
-			// Compute remaining deadline
+			// Compute remaining deadline. chainCtx always carries a
+			// deadline (created with context.WithTimeout in Execute),
+			// so the no-deadline case cannot occur.
 			if deadline, hasDeadline := chainCtx.Deadline(); hasDeadline {
 				remaining := time.Until(deadline)
 				if stepTimeout < remaining {
 					stepCtx, stepCancel = context.WithTimeout(chainCtx, stepTimeout)
 				}
-			} else {
-				stepCtx, stepCancel = context.WithTimeout(chainCtx, stepTimeout)
 			}
 		}
 

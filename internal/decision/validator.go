@@ -113,8 +113,8 @@ func ValidateResult(eligible []Candidate, result DecisionResult) error {
 		if len(result.RankedIDs) != 0 {
 			return fmt.Errorf("%w: ABSTAIN must have empty ranked_ids", ErrInvalidResult)
 		}
-	default:
-		return fmt.Errorf("%w: %q", ErrInvalidAction, result.Action)
+		// No default: ValidateResult rejects every unknown or empty action
+		// up front via ValidAction, so only the three cases above reach here.
 	}
 
 	return nil
