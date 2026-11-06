@@ -1,0 +1,291 @@
+name: v0.25.0 OpenAI + Anthropic live acceptance
+
+# One manual run executes both owner-selected providers on the exact main SHA.
+# Credentials are supplied only through the protected conformance-live
+# environment. The single artifact is the evidence bundle referenced by the
+# v0.25.0 structured acceptance record for issue #646.
+on:
+  workflow_dispatch:
+    inputs:
+      openai_model:
+        description: "Exact enabled OpenAI model ID from the operator account"
+        required: true
+        type: string
+      anthropic_model:
+        description: "Exact enabled Anthropic model ID from the operator account"
+        required: true
+        type: string
+      openai_input_cost_per_mtok:
+        description: "OpenAI input price in USD per 1M tokens for this exact model"
+        required: true
+        type: string
+      openai_output_cost_per_mtok:
+        description: "OpenAI output price in USD per 1M tokens for this exact model"
+        required: true
+        type: string
+      anthropic_input_cost_per_mtok:
+        description: "Anthropic input price in USD per 1M tokens for this exact model"
+        required: true
+        type: string
+      anthropic_output_cost_per_mtok:
+        description: "Anthropic output price in USD per 1M tokens for this exact model"
+        required: true
+        type: string
+      max_cost_usd_per_provider:
+        description: "Hard estimated/observed cost ceiling for EACH provider run (USD)"
+        required: true
+        default: "1.00"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v0250-provider-acceptance
+  cancel-in-progress: false
+
+jobs:
+  provider-acceptance:
+    name: OpenAI + Anthropic live canaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: conformance-live
+    steps:
+      - name: Checkout exact main candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Verify this is the current main tip
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Run this acceptance only from the main branch."
+            exit 1
+          fi
+          git fetch --no-tags origin main --depth=1
+          main_sha="$(git rev-parse FETCH_HEAD)"
+          if [[ "$main_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::The dispatch SHA is not the current main tip; refresh main and dispatch again."
+            exit 1
+          fi
+          echo "Acceptance candidate SHA: $GITHUB_SHA"
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+          cache: false
+
+      - name: Validate operator inputs and protected credentials
+        env:
+          OPENAI_API_KEY: ${{ secrets.NEXAROUTE_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.NEXAROUTE_ANTHROPIC_API_KEY }}
+          OPENAI_MODEL: ${{ inputs.openai_model }}
+          ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
+          OPENAI_INPUT_PRICE: ${{ inputs.openai_input_cost_per_mtok }}
+          OPENAI_OUTPUT_PRICE: ${{ inputs.openai_output_cost_per_mtok }}
+          ANTHROPIC_INPUT_PRICE: ${{ inputs.anthropic_input_cost_per_mtok }}
+          ANTHROPIC_OUTPUT_PRICE: ${{ inputs.anthropic_output_cost_per_mtok }}
+          MAX_COST_USD: ${{ inputs.max_cost_usd_per_provider }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Check presence only. Never print credential values.
+          [[ -n "$OPENAI_API_KEY" ]] || { echo "::error::NEXAROUTE_OPENAI_API_KEY is missing from conformance-live."; exit 1; }
+          [[ -n "$ANTHROPIC_API_KEY" ]] || { echo "::error::NEXAROUTE_ANTHROPIC_API_KEY is missing from conformance-live."; exit 1; }
+          [[ -n "$OPENAI_MODEL" && -n "$ANTHROPIC_MODEL" ]] || { echo "::error::Both exact model IDs are required."; exit 1; }
+          for value in "$OPENAI_INPUT_PRICE" "$OPENAI_OUTPUT_PRICE" "$ANTHROPIC_INPUT_PRICE" "$ANTHROPIC_OUTPUT_PRICE" "$MAX_COST_USD"; do
+            if ! [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v n="$value" 'BEGIN { exit !(n > 0) }'; then
+              echo "::error::Model prices and per-provider cost ceiling must be positive decimal USD values."
+              exit 1
+            fi
+          done
+          mkdir -p .artifacts/provider-v025
+
+      - name: Build the candidate canary binary
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          go build -trimpath -o ./bin/nexaroute ./cmd/gateway
+
+      - name: Run both bounded live canaries
+        id: canaries
+        env:
+          OPENAI_API_KEY: ${{ secrets.NEXAROUTE_OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.NEXAROUTE_ANTHROPIC_API_KEY }}
+          OPENAI_MODEL: ${{ inputs.openai_model }}
+          ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
+          OPENAI_INPUT_PRICE: ${{ inputs.openai_input_cost_per_mtok }}
+          OPENAI_OUTPUT_PRICE: ${{ inputs.openai_output_cost_per_mtok }}
+          ANTHROPIC_INPUT_PRICE: ${{ inputs.anthropic_input_cost_per_mtok }}
+          ANTHROPIC_OUTPUT_PRICE: ${{ inputs.anthropic_output_cost_per_mtok }}
+          MAX_COST_USD: ${{ inputs.max_cost_usd_per_provider }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          out=".artifacts/provider-v025"
+          # Seven scenarios, at most seven upstream calls, 4,096 input-token
+          # estimation ceiling and 512 output-token ceiling per provider.
+          # The same generic credential variable is mapped to one distinct
+          # protected secret per process; neither value enters argv or a file.
+          NEXAROUTE_CANARY_API_KEY="$OPENAI_API_KEY" ./bin/nexaroute conformance canary \
+            --acknowledge-cost --preset openai --model "$OPENAI_MODEL" \
+            --scenarios acceptance --max-calls 7 --max-input-tokens 4096 \
+            --max-output-tokens 512 --call-timeout 30s --overall-timeout 3m \
+            --input-cost-per-mtok "$OPENAI_INPUT_PRICE" \
+            --output-cost-per-mtok "$OPENAI_OUTPUT_PRICE" \
+            --max-cost-usd "$MAX_COST_USD" \
+            --out "$out/openai.json" >/dev/null 2>"$RUNNER_TEMP/openai-canary.stderr"
+          openai_exit=$?
+
+          NEXAROUTE_CANARY_API_KEY="$ANTHROPIC_API_KEY" ./bin/nexaroute conformance canary \
+            --acknowledge-cost --preset anthropic --model "$ANTHROPIC_MODEL" \
+            --scenarios acceptance --max-calls 7 --max-input-tokens 4096 \
+            --max-output-tokens 512 --call-timeout 30s --overall-timeout 3m \
+            --input-cost-per-mtok "$ANTHROPIC_INPUT_PRICE" \
+            --output-cost-per-mtok "$ANTHROPIC_OUTPUT_PRICE" \
+            --max-cost-usd "$MAX_COST_USD" \
+            --out "$out/anthropic.json" >/dev/null 2>"$RUNNER_TEMP/anthropic-canary.stderr"
+          anthropic_exit=$?
+
+          echo "openai_exit=$openai_exit" >> "$GITHUB_OUTPUT"
+          echo "anthropic_exit=$anthropic_exit" >> "$GITHUB_OUTPUT"
+          # Validation below determines the job verdict and still runs when
+          # one canary exits non-zero, preserving both reports for diagnosis.
+          exit 0
+
+      - name: Validate both live reports and create the evidence summary
+        if: always()
+        env:
+          OPENAI_MODEL: ${{ inputs.openai_model }}
+          ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
+          MAX_COST_USD: ${{ inputs.max_cost_usd_per_provider }}
+          OPENAI_EXIT: ${{ steps.canaries.outputs.openai_exit }}
+          ANTHROPIC_EXIT: ${{ steps.canaries.outputs.anthropic_exit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          root = Path(".artifacts/provider-v025")
+          root.mkdir(parents=True, exist_ok=True)
+          expected = {
+              "openai": {
+                  "dialect": "openai_compatible",
+                  "host": "api.openai.com",
+                  "model": os.environ["OPENAI_MODEL"],
+              },
+              "anthropic": {
+                  "dialect": "anthropic_compatible",
+                  "host": "api.anthropic.com",
+                  "model": os.environ["ANTHROPIC_MODEL"],
+              },
+          }
+          scenario_ids = {
+              "text", "stream", "stream_usage", "tools",
+              "tool_result", "auth_failure", "error_envelope",
+          }
+          max_cost = float(os.environ["MAX_COST_USD"])
+          errors = []
+          providers = []
+
+          for name, want in expected.items():
+              path = root / f"{name}.json"
+              record = {"provider": name, "report": str(path), "result": "FAIL"}
+              if not path.is_file():
+                  errors.append(f"{name}: report missing (canary exit={os.environ.get(name.upper() + '_EXIT', 'NOT_RUN')})")
+                  providers.append(record)
+                  continue
+
+              check = subprocess.run(
+                  [sys.executable, "scripts/check-acceptance-report.py",
+                   "--report", str(path), "--require-live"],
+                  text=True, capture_output=True,
+              )
+              if check.returncode != 0:
+                  errors.append(f"{name}: report validator failed: {(check.stdout + check.stderr).strip()[:1200]}")
+                  providers.append(record)
+                  continue
+
+              try:
+                  report = json.loads(path.read_text(encoding="utf-8"))
+              except (OSError, ValueError) as exc:
+                  errors.append(f"{name}: invalid JSON report: {exc}")
+                  providers.append(record)
+                  continue
+
+              provider = report.get("provider") or {}
+              limits = report.get("limits") or {}
+              scenarios = report.get("scenarios") or []
+              actual_ids = [item.get("id") for item in scenarios if isinstance(item, dict)]
+              statuses = {item.get("id"): item.get("status") for item in scenarios if isinstance(item, dict)}
+              host = urlsplit(provider.get("base_url", "")).hostname
+              estimated = limits.get("estimated_cost_usd")
+              observed = limits.get("observed_cost_usd")
+
+              checks = [
+                  (report.get("schema") == "conformance.live-canary.v1", "wrong report schema"),
+                  (report.get("outcome") == "PASS", f"overall outcome is {report.get('outcome')}"),
+                  (provider.get("dialect") == want["dialect"], f"wrong dialect: {provider.get('dialect')}"),
+                  (host == want["host"], f"wrong live provider host: {host}"),
+                  (provider.get("model") == want["model"], "report model does not match dispatch input"),
+                  (set(actual_ids) == scenario_ids and len(actual_ids) == len(scenario_ids), "selected scenario set is incomplete or contains duplicates"),
+                  (all(statuses.get(sid) == "PASS" for sid in scenario_ids), "one or more acceptance scenarios did not PASS"),
+                  (limits.get("max_calls") == 7 and limits.get("calls_used", 999) <= 7, "call ceiling or calls-used mismatch"),
+                  (limits.get("max_input_tokens") == 4096, "input-token estimate bound mismatch"),
+                  (limits.get("max_output_tokens") == 512, "output-token ceiling mismatch"),
+                  (limits.get("cost_estimate_known") is True, "model pricing was not applied; cost estimate is unknown"),
+                  (isinstance(estimated, (int, float)) and estimated <= max_cost, "preflight estimate exceeds the per-provider cost ceiling or is missing"),
+                  (observed is None or (isinstance(observed, (int, float)) and observed <= max_cost), "observed cost exceeds the per-provider ceiling"),
+              ]
+              bad = [message for ok, message in checks if not ok]
+              if bad:
+                  errors.extend(f"{name}: {message}" for message in bad)
+                  providers.append(record)
+                  continue
+
+              record["result"] = "PASS"
+              record["dialect"] = provider["dialect"]
+              record["model"] = provider["model"]
+              record["generated_at"] = report.get("generated_at")
+              record["scenarios"] = {sid: statuses[sid] for sid in sorted(scenario_ids)}
+              record["calls_used"] = limits.get("calls_used")
+              record["estimated_cost_usd"] = estimated
+              record["observed_cost_usd"] = observed
+              providers.append(record)
+
+          summary = {
+              "schema": "nexaroute.v0250-provider-acceptance.v1",
+              "release": "v0.25.0",
+              "commit": os.environ.get("GITHUB_SHA", ""),
+              "run_id": int(os.environ.get("GITHUB_RUN_ID", "0")),
+              "event": os.environ.get("GITHUB_EVENT_NAME", ""),
+              "result": "PASS" if not errors else "FAIL",
+              "provider_scope": ["openai", "anthropic"],
+              "providers": providers,
+              "errors": errors,
+          }
+          (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+          if errors:
+              for error in errors:
+                  print(f"::error title=v0.25.0 provider acceptance::{error}")
+              sys.exit(1)
+          print("Both OpenAI and Anthropic live canaries PASS; seven scenarios each; cost estimates known and within the approved per-provider ceiling.")
+          PY
+
+      - name: Upload combined provider acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v0250-openai-anthropic-acceptance-${{ github.sha }}-${{ github.run_id }}
+          path: .artifacts/provider-v025/
+          if-no-files-found: error
+          retention-days: 90
