@@ -288,6 +288,32 @@ func TestLeakMatrix_AdmissionRejectionTakesNoHold(t *testing.T) {
 	leakAssertReleased(t, s, "admission rejection", 0)
 }
 
+// Tier 2: provider-specific request construction can fail after budget
+// admission but before any upstream request is dispatched. Such a zero-spend
+// gateway failure must release synchronously, not commit the estimate at TTL.
+func TestLeakMatrix_AttemptBuildFailureReleasesWithoutDispatch(t *testing.T) {
+	var upstreamCalls atomic.Int64
+	up := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{}`)
+	})
+	s := leakGateway(t, 5, up, func(cfg *config.Config) {
+		cfg.Providers[0].Type = "gemini"
+		cfg.Providers[0].Models[0].Model = "gemini-model"
+	})
+	committedBefore, _ := leakCommittedReserved(s)
+	body := `{"model":"m","max_tokens":100,"messages":[{"role":"user","content":[{"type":"bogus_part","text":"hi"}]}]}`
+	rr := leakDo(t, s, http.MethodPost, "/v1/chat/completions", body)
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("build failure: want 502, got %d %s", rr.Code, rr.Body.String())
+	}
+	if got := upstreamCalls.Load(); got != 0 {
+		t.Fatalf("upstream calls=%d, want zero for a request-build failure", got)
+	}
+	leakAssertReleased(t, s, "provider attempt build failure", committedBefore)
+}
+
 // Tier 2: route-resolution failure is a gateway-side rejection with
 // provably zero upstream spend — the admission hold must be
 // released (Wave C-4 fix), not left to expire into a committed
