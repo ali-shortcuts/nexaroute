@@ -279,6 +279,14 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 	var lastErr string
 	var lastDerr error
 	attempts := 0
+	// attempts counts candidate work, including build failures. Track the
+	// actual upstream dispatch boundary separately for budget-release safety.
+	attemptedUpstream := false
+	defer func() {
+		if !attemptedUpstream {
+			s.budgetRelease(r)
+		}
+	}()
 	for i := 0; i < len(candidates) && attempts < max; i++ {
 		c := candidates[i]
 		attempts++
@@ -300,6 +308,7 @@ func (s *Server) geminiGenerateContent(w http.ResponseWriter, r *http.Request) {
 		}
 		s.autopilotNoteDispatched(autopilotRequestKeyFromContext(r.Context(), r.Header.Get("x-request-id")))
 		s.emitRouteAttempt(r.Header.Get("x-request-id"), "gemini", model, attempts, c, attemptKind)
+		attemptedUpstream = true
 		resp, sentPayload, repair, derr := s.doUpstreamWithRepair(
 			routeCtx, r.Header.Get("x-request-id"), bundle.a, deployment,
 			bundle.payload, bundle.path, streaming, forward, dialect, profile,
