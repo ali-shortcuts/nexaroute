@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-05T19:56:52.018Z",
+  "generated_at": "2026-11-06T16:30:24.257Z",
   "base": "http://127.0.0.1:18741/",
   "shots": [
     {
@@ -328,7 +328,7 @@
       "theme": "dark",
       "lang": "fa",
       "viewport": "desktop",
-      "sha256": "aa38b5ab85a90007c1d08cd888c5588abbb9b5675a8d63e77dbf046fc3345ee5"
+      "sha256": "295b6afd1343d4f476a7ef56f9e00d2c8f1f7e4dd3d7ad0a8f5786b75ac0157c"
     },
     {
       "file": "dark-fa-desktop/cost.png",
