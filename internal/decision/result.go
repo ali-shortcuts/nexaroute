@@ -74,9 +74,6 @@ func (r DecisionResult) IsAbstain() bool {
 	if r.Action == ActionAbstain {
 		return true
 	}
-	if r.Abstained && r.Action == ActionAbstain {
-		return true
-	}
 	// For backward compat during validation, treat explicit abstained flag with ABSTAIN action as abstain
 	if r.Abstained && r.Action == "" {
 		// Empty action is invalid per strict contract, but orchestrator may generate internal fallback with explicit ABSTAIN
