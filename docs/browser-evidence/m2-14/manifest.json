@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-05T19:56:52.018Z",
+  "generated_at": "2026-11-06T16:02:34.402Z",
   "base": "http://127.0.0.1:18741/",
   "shots": [
     {
@@ -64,7 +64,7 @@
       "theme": "dark",
       "lang": "en",
       "viewport": "desktop",
-      "sha256": "674bce73745c65ca68840dd79c0e92c55a981383bed61f7f6618cc5d32901cfd"
+      "sha256": "6cf7f0ed2172b937e0966ca36bbde11996d0685c8ede17e010453c62232289f1"
     },
     {
       "file": "dark-en-desktop/policies.png",
@@ -328,7 +328,7 @@
       "theme": "dark",
       "lang": "fa",
       "viewport": "desktop",
-      "sha256": "aa38b5ab85a90007c1d08cd888c5588abbb9b5675a8d63e77dbf046fc3345ee5"
+      "sha256": "295b6afd1343d4f476a7ef56f9e00d2c8f1f7e4dd3d7ad0a8f5786b75ac0157c"
     },
     {
       "file": "dark-fa-desktop/cost.png",
@@ -456,7 +456,7 @@
       "theme": "dark",
       "lang": "fa",
       "viewport": "mobile",
-      "sha256": "1b6458b1217b6539fa226b801a3fbca2c2a8ac0dc56eb7be8fe497ac6825b0f1"
+      "sha256": "defaf6b58f34c160a3c534f5fec260ee70fa00c086b3b8d5ad58032debf1dfac"
     },
     {
       "file": "dark-fa-mobile/evals.png",
@@ -464,7 +464,7 @@
       "theme": "dark",
       "lang": "fa",
       "viewport": "mobile",
-      "sha256": "3509f2a819496e92a550ac14a4900854aa53c05b26b3ef7015b14327ae3b1d5d"
+      "sha256": "57cef45026f14279e6998f96df0eecb07b7bcaf02fff958ccd6afd8c23199f24"
     },
     {
       "file": "dark-fa-mobile/observability.png",
@@ -552,7 +552,7 @@
       "theme": "light",
       "lang": "en",
       "viewport": "desktop",
-      "sha256": "07c84a1444351232697c09e951420ce16bf2e5d3f6247fd6bf8124d4e4ac453c"
+      "sha256": "22f32f99fc3f85542a17b870519c65e09ffae17f383edbd8f2d3588176f92f06"
     },
     {
       "file": "light-en-desktop/access.png",
@@ -696,7 +696,7 @@
       "theme": "light",
       "lang": "en",
       "viewport": "mobile",
-      "sha256": "59116a17370aa191c00b6bc1017644086eb857a0079b21d390e127b09ffab918"
+      "sha256": "a7f83533bd121f38d2b21627c77ae9b08d0927950e6653f18aaece15cb3f69a5"
     },
     {
       "file": "light-en-mobile/evals.png",
@@ -704,7 +704,7 @@
       "theme": "light",
       "lang": "en",
       "viewport": "mobile",
-      "sha256": "d6374e049444b406b58377a53cc5e102dccdae2013d2f7e23a10d7ee9d2bddef"
+      "sha256": "c23f04a535508f3fac958cad3bcfd040b7e0f4f008e1f78c47344f8926e7f38e"
     },
     {
       "file": "light-en-mobile/observability.png",
