@@ -2,7 +2,6 @@ package nexaflow
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -53,6 +52,11 @@ func (s *Service) InstantiateTemplate(ctx context.Context, templateID string, pl
 			base = base[idx+1:]
 		}
 		id := base
+		// Unreachable with the shipped templates (and therefore
+		// uncovered): base templates never repeat a node id and
+		// all 23 registry ids have distinct last segments, so
+		// taken[id] is never set at this point. The loop stays
+		// for future template authors.
 		for n := 2; taken[id]; n++ {
 			id = fmt.Sprintf("%s-%d", base, n)
 		}
@@ -83,15 +87,19 @@ func (s *Service) InstantiateTemplate(ctx context.Context, templateID string, pl
 			break
 		}
 	}
-	// Entry-point completion (not a catalog change): four of the five
-	// shipped templates carry no trigger node, so a draft built from
-	// one would fail validation with "no triggers" and the gallery's
-	// Use-template button would always error. A manual trigger is the
-	// natural entry point (run input verbatim, no config): it is added
-	// visibly as the first node, wired to every root node (nodes with
-	// no incoming template edge), and the draft shows it like any
-	// other node. Templates that already carry a trigger are
-	// untouched.
+	// Entry-point completion (not a catalog change): a draft built
+	// from a trigger-less template would fail validation with "no
+	// triggers" and the gallery's Use-template button would always
+	// error. A manual trigger is the natural entry point (run input
+	// verbatim, no config): it is added visibly as the first node,
+	// wired to every root node (nodes with no incoming template
+	// edge), and the draft shows it like any other node. Templates
+	// that already carry a trigger are untouched.
+	//
+	// Unreachable with the shipped templates (and therefore
+	// uncovered): all five carry a trigger node today, so
+	// hasTrigger is always true here. The completion stays for
+	// future trigger-less templates.
 	var completionEdges []DefinitionEdge
 	if !hasTrigger {
 		triggerID := "manual"
@@ -130,6 +138,11 @@ func (s *Service) InstantiateTemplate(ctx context.Context, templateID string, pl
 			Config: node.Config,
 		})
 	}
+	// Both error returns below are unreachable with the shipped
+	// templates (and therefore uncovered): every template edge
+	// references nodes listed in that same template, so
+	// instanceByNode always contains both endpoints. They stay as
+	// fail-closed guards for future template edits.
 	for i, pair := range resolved.Edges {
 		from, ok := instanceByNode[pair[0]]
 		if !ok {
@@ -145,12 +158,15 @@ func (s *Service) InstantiateTemplate(ctx context.Context, templateID string, pl
 			To:   to,
 		})
 	}
+	// completionEdges is empty unless the (unreachable) completion
+	// above ran, so this loop body is uncovered with the shipped
+	// templates; see the note there.
 	for i, e := range completionEdges {
 		e.ID = fmt.Sprintf("e%d", len(def.Edges)+i+1)
 		def.Edges = append(def.Edges, e)
 	}
 	var suffix [4]byte
-	if _, err := rand.Read(suffix[:]); err != nil {
+	if _, err := nexaflowRandRead(suffix[:]); err != nil {
 		return Definition{}, fmt.Errorf("nexaflow: instantiate template: %w", err)
 	}
 	def.ID = "tpl-" + templateID + "-" + hex.EncodeToString(suffix[:])
@@ -171,6 +187,8 @@ func DefinitionSecretRefs(def *Definition, reg *Registry) []string {
 	}
 	seen := make(map[string]bool)
 	var refs []string
+	// Both call sites below call add only after a successful
+	// reg.Lookup, so spec is never nil here; no nil guard needed.
 	add := func(spec *NodeSpec, cfg map[string]any) {
 		if spec == nil {
 			return

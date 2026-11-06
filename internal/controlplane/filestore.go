@@ -34,7 +34,14 @@ type FileStore struct {
 	path        string
 	lockPath    string
 	lockTimeout time.Duration
-	mu          sync.Mutex
+	// atomicFS is the durable-write implementation. Production stores use
+	// the real filesystem; tests substitute a failing one to prove Put
+	// and Delete surface commit failures instead of reporting success.
+	// There is no deterministic filesystem fault for this path: the
+	// lock file must be creatable in the store directory, so a
+	// read-only directory fails at lock acquisition, before persist.
+	atomicFS atomicFileFS
+	mu       sync.Mutex
 }
 
 // FileStoreOptions tunes FileStore behavior. The zero value is valid.
@@ -56,7 +63,7 @@ func NewFileStoreWithOptions(path string, opts FileStoreOptions) (*FileStore, er
 	if timeout <= 0 {
 		timeout = DefaultFileLockTimeout
 	}
-	return &FileStore{path: path, lockPath: lockFilePath(path), lockTimeout: timeout}, nil
+	return &FileStore{path: path, lockPath: lockFilePath(path), lockTimeout: timeout, atomicFS: defaultAtomicFileFS()}, nil
 }
 
 // withStoreLock serializes fn against other processes sharing the store
@@ -180,7 +187,7 @@ func (s *FileStore) persist(state fileState) error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(filepath.Dir(s.path), ".controlplane-*", s.path, append(data, '\n')); err != nil {
+	if err := writeFileAtomicWithFS(s.atomicFS, filepath.Dir(s.path), ".controlplane-*", s.path, append(data, '\n')); err != nil {
 		return err
 	}
 	return nil

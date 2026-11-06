@@ -32,6 +32,11 @@ const (
 	metaKeyAllocator = "audit-allocator"
 )
 
+// postgresDriverName is the database/sql driver OpenPostgres opens.
+// It is a variable (not a constant) so tests can point it at a fake
+// driver registered under a unique name; production always uses "pgx".
+var postgresDriverName = "pgx"
+
 // PostgresStore is a Backend over PostgreSQL.
 type PostgresStore struct {
 	db            *sql.DB
@@ -51,7 +56,7 @@ func OpenPostgres(ctx context.Context, dsn string, maxAuditItems, retentionDays 
 	if retentionDays < 1 || retentionDays > 3650 {
 		return nil, errors.New("security audit retention_days must be between 1 and 3650")
 	}
-	db, err := sql.Open("pgx", dsn)
+	db, err := sql.Open(postgresDriverName, dsn)
 	if err != nil {
 		return nil, errors.New("securitystore: invalid postgres configuration")
 	}
