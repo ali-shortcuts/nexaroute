@@ -340,6 +340,23 @@ func TestCoverageAgentASha256FileDirectory(t *testing.T) {
 	}
 }
 
+func TestCoverageAgentASha256FileStatError(t *testing.T) {
+	// fstat(2) on a just-opened descriptor fails only on a failing
+	// device, so the Stat error branch is driven through the fileStat
+	// seam; without the fail-closed check the nil FileInfo panics at
+	// info.Size() in the return.
+	path := filepath.Join(t.TempDir(), "bundle.bin")
+	if err := os.WriteFile(path, []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := fileStat
+	fileStat = func(*os.File) (os.FileInfo, error) { return nil, errors.New("stat boom") }
+	t.Cleanup(func() { fileStat = old })
+	if _, _, err := sha256File(path); err == nil || !strings.Contains(err.Error(), "stat boom") {
+		t.Fatalf("expected the injected Stat error, got %v", err)
+	}
+}
+
 func TestCoverageAgentACheckBundledAuditChainVerifyError(t *testing.T) {
 	// A pre-cancelled context makes VerifyAuditChain fail on a
 	// store that opens fine, proving the verification-error branch

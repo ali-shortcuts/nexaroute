@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -854,6 +855,28 @@ func TestCoverageAgentADiagnosticsRecentErrorsReadError(t *testing.T) {
 	}
 }
 
+func TestCoverageAgentADiagnosticsRecentErrorsStatError(t *testing.T) {
+	// fstat(2) on a just-opened descriptor fails only on a failing
+	// device, so the Stat error branch is driven through the fileStat
+	// seam; without the fail-closed check the nil FileInfo panics at
+	// info.Size() below.
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "gateway.log")
+	if err := os.WriteFile(logPath, []byte("error: boom\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := fileStat
+	fileStat = func(*os.File) (os.FileInfo, error) { return nil, errors.New("stat boom") }
+	t.Cleanup(func() { fileStat = old })
+	cfg := config.Default()
+	cfg.Logging.File = logPath
+	san := newDiagnosticsSanitizer(&cfg)
+	result := diagnosticsRecentErrorsFrom(cfg, filepath.Join(dir, "config.json"), san)
+	if result.LogAvailable || len(result.Included) != 0 {
+		t.Fatalf("expected no log data when Stat fails, got %+v", result)
+	}
+}
+
 type covcliFileInfo struct{ mode os.FileMode }
 
 func (f covcliFileInfo) Name() string       { return "bundle" }
@@ -952,7 +975,10 @@ func TestCoverageAgentAWriteDiagnosticsBundleAtomicModeMismatch(t *testing.T) {
 
 func TestCoverageAgentAWriteReportCreateTempError(t *testing.T) {
 	// A symlink to /sys makes MkdirAll a no-op (the path already
-	// exists as a directory) while CreateTemp fails EROFS.
+	// exists as a directory) while CreateTemp fails — EROFS as root,
+	// EACCES as an unprivileged user (GitHub runners run
+	// unprivileged, so asserting "read-only" failed in CI). Either
+	// errno proves the CreateTemp branch under test.
 	dir := t.TempDir()
 	link := filepath.Join(dir, "ro")
 	if err := os.Symlink("/sys", link); err != nil {
@@ -960,8 +986,8 @@ func TestCoverageAgentAWriteReportCreateTempError(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	err := writeReport(filepath.Join(link, "report.json"), []byte(`{}`), &stdout)
-	if err == nil || !strings.Contains(err.Error(), "read-only") {
-		t.Fatalf("expected a read-only-filesystem CreateTemp error, got %v", err)
+	if err == nil || (!errors.Is(err, fs.ErrPermission) && !errors.Is(err, syscall.EROFS)) {
+		t.Fatalf("expected a permission-denied or read-only-filesystem CreateTemp error, got %v", err)
 	}
 }
 

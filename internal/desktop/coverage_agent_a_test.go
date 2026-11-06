@@ -43,30 +43,20 @@ func TestAcquireOpenFileError(t *testing.T) {
 	}
 }
 
-// TestAcquireChmodError drives the fchmod failure branch through a symlink
-// to /proc/self/status: the file opens O_RDWR, but procfs refuses chmod
-// (EPERM) and the mode is left untouched. The failure is side-effect free.
+// TestAcquireChmodError drives the fchmod failure branch through the
+// chmodFunc seam. The procfs route (symlink to /proc/self/status) is not
+// deterministic: as root the open succeeds and chmod fails EPERM, but as
+// an unprivileged user the O_RDWR open itself fails EACCES before chmod
+// is reached, so the test failed on GitHub runners. The seam proves the
+// branch — a chmod failure fails closed — on every user.
 func TestAcquireChmodError(t *testing.T) {
 	requireLinux(t)
-	target := "/proc/self/status"
-	st, err := os.Stat(target)
-	if err != nil {
-		t.Skip("no /proc/self/status")
-	}
-	before := st.Mode().Perm()
-	link := filepath.Join(t.TempDir(), "nexaroute.lock")
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatal(err)
-	}
-	_, ok, err := Acquire(link)
-	if err == nil || ok {
-		t.Fatalf("Acquire via procfs symlink: ok=%v err=%v, want a chmod error", ok, err)
-	}
-	if !strings.Contains(err.Error(), "chmod") {
-		t.Fatalf("err=%v, want a chmod failure", err)
-	}
-	if st, err := os.Stat(target); err != nil || st.Mode().Perm() != before {
-		t.Fatalf("procfs target mode changed: %v err=%v", st, err)
+	old := chmodFunc
+	chmodFunc = func(*os.File, os.FileMode) error { return errors.New("chmod boom") }
+	t.Cleanup(func() { chmodFunc = old })
+	_, ok, err := Acquire(filepath.Join(t.TempDir(), "nexaroute.lock"))
+	if err == nil || ok || !strings.Contains(err.Error(), "chmod boom") {
+		t.Fatalf("Acquire with failing chmod: ok=%v err=%v, want a chmod failure", ok, err)
 	}
 }
 

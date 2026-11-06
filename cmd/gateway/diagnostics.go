@@ -415,6 +415,12 @@ func diagnosticsBaseURLHost(raw string) string {
 	return u.Scheme + "://" + u.Host
 }
 
+// fileStat wraps (*os.File).Stat so tests can drive the fstat error
+// branch: fstat(2) on a just-opened descriptor fails only with EBADF
+// (not open) or EIO on a failing device, neither triggerable
+// deterministically. The call sites stay fail-closed on Stat error.
+var fileStat = (*os.File).Stat
+
 func diagnosticsRecentErrorsFrom(cfg config.Config, configPath string, san *diagnosticsSanitizer) diagnosticsRecentErrors {
 	result := diagnosticsRecentErrors{Included: []string{}}
 	path, ok := diagnosticsLogPath(cfg, configPath)
@@ -426,10 +432,12 @@ func diagnosticsRecentErrorsFrom(cfg config.Config, configPath string, san *diag
 		return result
 	}
 	defer f.Close()
-	// f.Stat cannot fail on a file descriptor this function just
-	// opened: fstat(2) fails only with EBADF (not open) or EIO (a
-	// failing device, which would have failed the open/read first).
-	info, _ := f.Stat()
+	// A Stat failure (failing device) fails closed with no log data
+	// rather than dereferencing a nil FileInfo below.
+	info, err := fileStat(f)
+	if err != nil {
+		return result
+	}
 	offset := int64(0)
 	if info.Size() > diagnosticsMaxLogBytes {
 		offset = info.Size() - diagnosticsMaxLogBytes

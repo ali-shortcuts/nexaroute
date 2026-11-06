@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -395,13 +397,19 @@ func TestCoverageAgentAWriteJournalManifestCloseError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCoverageAgentAWriteFileAtomicCreateTempError(t *testing.T) {
+	// CreateTemp in /sys fails, but with a different errno depending
+	// on the user: EROFS ("read-only file system") as root, EACCES
+	// ("permission denied") as an unprivileged user (GitHub runners
+	// run unprivileged, so asserting "read-only" failed in CI).
+	// Either errno proves the CreateTemp branch under test.
 	dir := t.TempDir()
 	link := filepath.Join(dir, "sys")
 	if err := os.Symlink("/sys", link); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFileAtomic(filepath.Join(link, "f.json"), []byte("{}"), 0o600); err == nil || !strings.Contains(err.Error(), "read-only") {
-		t.Fatalf("writeFileAtomic err=%v, want a read-only filesystem error", err)
+	err := writeFileAtomic(filepath.Join(link, "f.json"), []byte("{}"), 0o600)
+	if err == nil || (!errors.Is(err, fs.ErrPermission) && !errors.Is(err, syscall.EROFS)) {
+		t.Fatalf("writeFileAtomic err=%v, want a permission-denied or read-only filesystem error", err)
 	}
 }
 

@@ -561,10 +561,12 @@ func sha256File(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	defer func() { _ = fh.Close() }()
-	// fstat(2) on a descriptor this function just opened fails only
-	// with EBADF (not open) or EIO on a failing device, which would
-	// have failed the open or the read first.
-	info, _ := fh.Stat()
+	// A Stat failure (failing device) fails closed rather than
+	// dereferencing a nil FileInfo in the return below.
+	info, err := fileStat(fh)
+	if err != nil {
+		return "", 0, err
+	}
 	h := sha256.New()
 	if _, err := io.Copy(h, fh); err != nil {
 		return "", 0, err

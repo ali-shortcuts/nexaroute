@@ -172,8 +172,10 @@ func newNexaflowService(cfg config.NexaflowConfig, baseURL string, hm *health.Ma
 	}
 	var svc *nexaflow.Service
 	// NewEngine only fails on a nil Store/Registry or a crypto/rand
-	// failure; Store and Registry are constructed non-nil above, so
-	// the error is unreachable here.
+	// failure while generating a WorkerID; Store and Registry are
+	// constructed non-nil above, and resolveWorkerID never returns
+	// "" (it defaults to "gateway"), so no random ID is generated
+	// and the error is unreachable here.
 	engine, _ := nexaflow.NewEngine(nexaflow.EngineOptions{
 		Store:    store,
 		Registry: reg,
