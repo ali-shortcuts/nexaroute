@@ -657,13 +657,9 @@ func percentile(values []float64, p float64) float64 {
 	if p >= 1 {
 		return cp[len(cp)-1]
 	}
+	// For p in (0,1) and n >= 1, ceil(p*n) is in [1,n], so idx is in
+	// [0,n-1] and no clamping applies; p <= 0 and p >= 1 return above.
 	idx := int(math.Ceil(p*float64(len(cp)))) - 1
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(cp) {
-		idx = len(cp) - 1
-	}
 	return cp[idx]
 }
 

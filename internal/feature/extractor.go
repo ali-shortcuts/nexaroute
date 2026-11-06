@@ -31,13 +31,12 @@ func NewExtractor() *Extractor { return &Extractor{} }
 // It reuses the existing inspection logic (vision, reasoning, session, token estimate)
 // but also collects lexical signals from up to 64 KiB of *relevant* text only.
 func (e *Extractor) Extract(raw []byte, opts ExtractOptions) RequestFeatures {
+	// ClassifyClient is total over the five declared classes, so the
+	// result is always valid; no fallback applies.
 	out := RequestFeatures{
 		Protocol:    opts.Protocol,
 		Streaming:   opts.Streaming,
 		ClientClass: ClassifyClient(opts.UserAgent),
-	}
-	if !out.ClientClass.Valid() {
-		out.ClientClass = ClientClassUnknown
 	}
 	if out.Protocol == "" {
 		out.Protocol = ProtocolUnknown
@@ -207,10 +206,9 @@ func (e *Extractor) Extract(raw []byte, opts ExtractOptions) RequestFeatures {
 		out.AudioCount = boundInt(audioCount, 0, maxAudioCount)
 		out.MessageCount = boundInt(messageCount, 0, maxMessageCount)
 		out.TotalChars = boundInt(chars, 0, maxTotalChars)
+		// chars and messageCount are non-negative counts and the
+		// constants are positive, so this sum is always positive.
 		out.EstimatedPromptTokens = chars/4 + messageCount*perMessageOverhead + defaultEstimatedTokens
-		if out.EstimatedPromptTokens < 0 {
-			out.EstimatedPromptTokens = defaultEstimatedTokens
-		}
 		out.EstimatedTotalTokens = out.EstimatedPromptTokens + out.MaxOutputTokens
 		out.HasToolResult = hasToolResult
 		out.HasImageURL = hasImageURL

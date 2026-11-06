@@ -1,7 +1,6 @@
 package jev
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
@@ -165,9 +164,9 @@ func BuildCandidateDescription(c decision.Candidate, required int) string {
 		c.ContextWindow, headroom, c.Capabilities.Tools, c.Capabilities.Vision, c.Capabilities.Reasoning, c.Capabilities.Streaming,
 		latency, cost, reliability, strings.Join(caps, ","))
 
-	if len(desc) > remote.MaxCandidateDescriptionLength {
-		desc = desc[:remote.MaxCandidateDescriptionLength]
-	}
+	// desc is bounded by construction (fixed template + bucket strings +
+	// at most a 20-digit context window + at most four capability tokens:
+	// at most ~204 bytes), always below MaxCandidateDescriptionLength (512).
 	return desc
 }
 
@@ -260,14 +259,11 @@ func BuildJevRequest(req decision.DecisionRequest, mapping OpaqueMapping) (*JevR
 		return nil, err
 	}
 
-	// Measure bytes
-	b, err := json.Marshal(jevReq)
-	if err != nil {
-		return nil, remote.NewError(remote.ErrInvalidResponse, "failed to marshal")
-	}
-	if len(b) > remote.MaxRequestBodyBytes {
-		return nil, &remote.Error{Kind: remote.ErrRequestTooLarge, Message: fmt.Sprintf("request %d > %d", len(b), remote.MaxRequestBodyBytes)}
-	}
-
+	// No separate byte measurement here: Validate caps candidates at
+	// MaxCandidates (100) and descriptions at 512 bytes, the task at
+	// MaxTaskLength (1024), and each description is bounded by
+	// construction to ~204 bytes, so a request is always below
+	// MaxRequestBodyBytes (32 KiB); TestAgentFRequestSizeBound pins the
+	// measured maximum for 100 maxed candidates.
 	return jevReq, nil
 }

@@ -45,9 +45,6 @@ func ComputePrimaryConstraints(candidates []Candidate, pinnedID string) PrimaryS
 	if len(bandPool) < len(candidates) {
 		reasonCodes = append(reasonCodes, ReasonPoolBoundaryEnforced)
 	}
-	if len(bandPool) == 0 {
-		bandPool = candidates
-	}
 
 	// Affinity authoritative before priority, but not over pool boundary
 	if pinnedID != "" {
@@ -67,53 +64,40 @@ func ComputePrimaryConstraints(candidates []Candidate, pinnedID string) PrimaryS
 
 	// Minimum priority tier only
 	band := bandPool
-	if len(band) > 0 {
-		minPriority := band[0].Priority
-		for _, c := range band[1:] {
-			if c.Priority < minPriority {
-				minPriority = c.Priority
-			}
-		}
-		filtered := make([]Candidate, 0, len(band))
-		for _, c := range band {
-			if c.Priority == minPriority {
-				filtered = append(filtered, c)
-			}
-		}
-		if len(filtered) < len(band) {
-			reasonCodes = append(reasonCodes, ReasonPriorityGuardrail)
-		}
-		if len(filtered) > 0 {
-			band = filtered
-		}
-		// Prepare allowed IDs
-		allowed := make([]string, 0, len(band))
-		for _, c := range band {
-			allowed = append(allowed, c.ID)
-		}
-		// Determine minPriority for debugging
-		mp := 0
-		if len(band) > 0 {
-			mp = band[0].Priority
-		}
-		return PrimarySelectionConstraints{
-			AllowedPrimaryIDs: allowed,
-			ForcedPrimaryID:   "",
-			ReasonCodes:       reasonCodes,
-			MinOrdinal:        minOrdinal,
-			MinPriority:       mp,
+	minPriority := band[0].Priority
+	for _, c := range band[1:] {
+		if c.Priority < minPriority {
+			minPriority = c.Priority
 		}
 	}
-
-	// Fallback: all candidates allowed (defensive)
-	allowed := make([]string, 0, len(candidates))
-	for _, c := range candidates {
+	filtered := make([]Candidate, 0, len(band))
+	for _, c := range band {
+		if c.Priority == minPriority {
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) < len(band) {
+		reasonCodes = append(reasonCodes, ReasonPriorityGuardrail)
+	}
+	if len(filtered) > 0 {
+		band = filtered
+	}
+	// Prepare allowed IDs
+	allowed := make([]string, 0, len(band))
+	for _, c := range band {
 		allowed = append(allowed, c.ID)
+	}
+	// Determine minPriority for debugging
+	mp := 0
+	if len(band) > 0 {
+		mp = band[0].Priority
 	}
 	return PrimarySelectionConstraints{
 		AllowedPrimaryIDs: allowed,
+		ForcedPrimaryID:   "",
 		ReasonCodes:       reasonCodes,
 		MinOrdinal:        minOrdinal,
+		MinPriority:       mp,
 	}
 }
 

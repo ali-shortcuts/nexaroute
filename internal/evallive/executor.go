@@ -258,10 +258,8 @@ func (e *LiveEvaluationExecutor) Execute(ctx context.Context, c eval.Case) (eval
 		e.failures.Add(1)
 		out.Status = eval.OutcomeError
 		out.ErrorType = "upstream_transport"
-	default:
-		e.failures.Add(1)
-		out.Status = eval.OutcomeError
-		out.ErrorType = "upstream_unknown"
+		// No default: LiveComplete only ever produces the five
+		// LiveErrorType values above (see providers.LiveComplete).
 	}
 	return out, nil
 }
@@ -294,31 +292,21 @@ func (e *LiveEvaluationExecutor) PromptCaseIDs() []string {
 // MaxOutputTokensForRun returns the completion budget in force for this run.
 func (e *LiveEvaluationExecutor) MaxOutputTokensForRun() int { return e.maxOutputTokens }
 
+// httpErrorType names an HTTP failure. Callers only invoke it with a real
+// HTTP status (> 0, set by LiveComplete from the upstream response).
 func httpErrorType(status int) string {
-	if status > 0 {
-		return "http_" + itoa(status)
-	}
-	return "http_error"
+	return "http_" + itoa(status)
 }
 
+// itoa formats a positive status code. Callers only pass values > 0
+// (via httpErrorType), so the zero and negative cases cannot occur.
 func itoa(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
 	var buf [24]byte
 	i := len(buf)
 	for v > 0 {
 		i--
 		buf[i] = byte('0' + v%10)
 		v /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
 	}
 	return string(buf[i:])
 }

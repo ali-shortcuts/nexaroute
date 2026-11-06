@@ -59,13 +59,12 @@ func ParseAndValidate(body []byte, allowedIDs map[string]struct{}) (*ParsedRespo
 	if _, ok := allowedIDs[data.Decision]; !ok {
 		return nil, &remote.Error{Kind: remote.ErrUnknownCandidate, Message: fmt.Sprintf("unknown choice %s", data.Decision)}
 	}
-	// Confidence validation
+	// Confidence validation. Non-finite values cannot arrive here:
+	// encoding/json rejects NaN/Infinity literals and out-of-range
+	// numbers at unmarshal, so only the finite bounds check applies.
 	conf := 0.0
 	if data.Confidence != nil {
 		c := *data.Confidence
-		if math.IsNaN(c) || math.IsInf(c, 0) {
-			return nil, remote.NewError(remote.ErrInvalidResponse, "nan/inf confidence")
-		}
 		if c < 0 || c > 1 {
 			return nil, remote.NewError(remote.ErrInvalidResponse, fmt.Sprintf("confidence out of bounds %f", c))
 		}

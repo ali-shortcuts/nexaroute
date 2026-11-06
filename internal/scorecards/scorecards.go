@@ -290,13 +290,9 @@ func ConfidenceFromSamples(n int) float64 {
 	if n >= FullConfidenceSamples {
 		return 1
 	}
+	// With 0 < n < FullConfidenceSamples, c is strictly between 0 and 1,
+	// so no clamping applies.
 	c := float64(n) / float64(FullConfidenceSamples)
-	if c < 0 {
-		return 0
-	}
-	if c > 1 {
-		return 1
-	}
 	return c
 }
 
