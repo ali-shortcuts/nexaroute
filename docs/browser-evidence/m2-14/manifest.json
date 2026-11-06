@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-05T19:56:52.018Z",
+  "generated_at": "2026-11-06T22:47:35.925Z",
   "base": "http://127.0.0.1:18741/",
   "shots": [
     {
@@ -216,7 +216,7 @@
       "theme": "dark",
       "lang": "en",
       "viewport": "mobile",
-      "sha256": "111444108c9625a836ec8d56a69716ffe1f0907519a7bd3e37336f7a516a6ad5"
+      "sha256": "c64c0933e7895de417e5e592e228fa5ca199bd6226eaa3dd6ad9db9239ce23ec"
     },
     {
       "file": "dark-en-mobile/evals.png",
@@ -224,7 +224,7 @@
       "theme": "dark",
       "lang": "en",
       "viewport": "mobile",
-      "sha256": "6cd4ab9178826e52a0376b84f23da444bd5c209b57ace4e250284997dae5dfe6"
+      "sha256": "12a443811391e8a44270630e83f7c79510aa4f52e14177788097fc8877344b0c"
     },
     {
       "file": "dark-en-mobile/observability.png",
@@ -328,7 +328,7 @@
       "theme": "dark",
       "lang": "fa",
       "viewport": "desktop",
-      "sha256": "aa38b5ab85a90007c1d08cd888c5588abbb9b5675a8d63e77dbf046fc3345ee5"
+      "sha256": "295b6afd1343d4f476a7ef56f9e00d2c8f1f7e4dd3d7ad0a8f5786b75ac0157c"
     },
     {
       "file": "dark-fa-desktop/cost.png",
@@ -696,7 +696,7 @@
       "theme": "light",
       "lang": "en",
       "viewport": "mobile",
-      "sha256": "59116a17370aa191c00b6bc1017644086eb857a0079b21d390e127b09ffab918"
+      "sha256": "a7f83533bd121f38d2b21627c77ae9b08d0927950e6653f18aaece15cb3f69a5"
     },
     {
       "file": "light-en-mobile/evals.png",
@@ -704,7 +704,7 @@
       "theme": "light",
       "lang": "en",
       "viewport": "mobile",
-      "sha256": "d6374e049444b406b58377a53cc5e102dccdae2013d2f7e23a10d7ee9d2bddef"
+      "sha256": "c23f04a535508f3fac958cad3bcfd040b7e0f4f008e1f78c47344f8926e7f38e"
     },
     {
       "file": "light-en-mobile/observability.png",
