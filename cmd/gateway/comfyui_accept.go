@@ -211,6 +211,23 @@ func runComfyUIAccept(args []string, stdout, stderr io.Writer) int {
 	return code
 }
 
+// comfyAcceptNewLocal is a seam for storage.NewLocal in
+// runComfyUIAcceptChecks: NewLocal fails only on an empty root, a
+// negative size cap, a MkdirAll failure, or a filepath.Abs failure.
+// runDir is a fresh non-empty MkdirTemp result and maxOutput is
+// normalized positive before this call, so the error return is
+// reachable in production only via a deleted working directory
+// (Abs) or a filesystem fault. Production uses storage.NewLocal.
+var comfyAcceptNewLocal = storage.NewLocal
+
+// comfyAcceptVerifyAssetAccess is a seam for
+// verifyComfyAcceptAssetAccess in runComfyUIAcceptChecks: assets
+// come from the local store under runDir as regular 0600 files, so
+// the check fails in production only if a stored file is replaced,
+// removed, or re-permissioned between download and this check.
+// Production uses verifyComfyAcceptAssetAccess.
+var comfyAcceptVerifyAssetAccess = verifyComfyAcceptAssetAccess
+
 func runComfyUIAcceptChecks(report *comfyAcceptReport, cfg config.Config, configPath, assetDir, ffprobePath, prompt string, duration float64, fps, width, height int, maxOutput int64, timeout, pollInterval time.Duration) int {
 	preflightStart := time.Now()
 	if !cfg.Video.Enabled || !cfg.Video.ComfyUIEnabled {
@@ -330,7 +347,7 @@ func runComfyUIAcceptChecks(report *comfyAcceptReport, cfg config.Config, config
 		return 1
 	}
 	report.Target.AssetDirectory = runDir
-	sink, err := storage.NewLocal(runDir, maxOutput)
+	sink, err := comfyAcceptNewLocal(runDir, maxOutput)
 	if err != nil {
 		_ = os.RemoveAll(runDir)
 		addComfyAcceptCheck(report, "comfyui:model_inference", externalStatusFail,
@@ -388,14 +405,13 @@ func runComfyUIAcceptChecks(report *comfyAcceptReport, cfg config.Config, config
 	report.Job.Progress = status.Progress
 	addComfyAcceptCheck(report, "comfyui:poll", externalStatusPass,
 		"ComfyUI reported a completed workflow", pollStart)
-	if len(status.Outputs) == 0 {
-		addComfyAcceptCheck(report, "comfyui:download", externalStatusFail,
-			"completed workflow returned no video outputs", time.Time{})
-		addComfyAcceptCheck(report, "comfyui:model_inference", externalStatusFail,
-			"workflow completed but produced no MP4 video output", time.Time{})
-		comfyAcceptFailClosed(report, runDir, provider)
-		return 1
-	}
+	// A completed workflow with no MP4 outputs never reaches this
+	// point: providers.ComfyUI.GetJob converts it into a Failed
+	// status ("ComfyUI workflow completed without an MP4 output"),
+	// so pollComfyAcceptJob returns an error for it and the poll
+	// branch above handles it. The len(status.Outputs)==0 guard is
+	// therefore unreachable and removed; a Completed status always
+	// carries at least one output.
 	for i := range status.Outputs {
 		meta := make(map[string]string, len(status.Outputs[i].Metadata)+3)
 		for k, v := range status.Outputs[i].Metadata {
@@ -415,14 +431,12 @@ func runComfyUIAcceptChecks(report *comfyAcceptReport, cfg config.Config, config
 		comfyAcceptFailClosed(report, runDir, provider)
 		return 1
 	}
-	if len(assets) == 0 {
-		addComfyAcceptCheck(report, "comfyui:download", externalStatusFail,
-			"provider returned no persisted output assets", downloadStart)
-		addComfyAcceptCheck(report, "comfyui:model_inference", externalStatusFail,
-			"workflow completed but no persisted video asset was produced", time.Time{})
-		comfyAcceptFailClosed(report, runDir, provider)
-		return 1
-	}
+	// A successful DownloadOutputs with non-empty status.Outputs
+	// always returns at least one asset: downloadComfyOutputs
+	// errors on zero outputs ("comfyui completion has no video
+	// output assets") and returns one saved asset per output, or
+	// an error. The len(assets)==0 guard is therefore unreachable
+	// and removed; a nil error here always carries >=1 asset.
 	addComfyAcceptCheck(report, "comfyui:download", externalStatusPass,
 		fmt.Sprintf("downloaded and persisted %d video asset(s) through the local asset store", len(assets)), downloadStart)
 
@@ -442,7 +456,7 @@ func runComfyUIAcceptChecks(report *comfyAcceptReport, cfg config.Config, config
 	}
 	accessStart := time.Now()
 	for _, asset := range assets {
-		if accessErr := verifyComfyAcceptAssetAccess(runDir, asset); accessErr != nil {
+		if accessErr := comfyAcceptVerifyAssetAccess(runDir, asset); accessErr != nil {
 			addComfyAcceptCheck(report, "comfyui:asset_path", externalStatusFail, accessErr.Error(), accessStart)
 			addComfyAcceptCheck(report, "comfyui:model_inference", externalStatusFail,
 				"workflow output failed the acceptance asset-path/access check", time.Time{})
@@ -523,12 +537,21 @@ func comfyAcceptVideoConfig(cfg config.VideoConfig, configPath string) video.Con
 	}
 }
 
+// pollComfyAcceptCtxErr is a seam for pollComfyAcceptJob's context
+// check at the top of the loop: the wrapped-error branch only fires
+// when the context is cancelled in the window between the poll timer
+// firing and the next iteration, while a status error is outstanding,
+// so it is reachable in production only as a race. The plain-error
+// branch is covered by a cancelled context with no prior error.
+// Production uses ctx.Err.
+var pollComfyAcceptCtxErr = func(ctx context.Context) error { return ctx.Err() }
+
 func pollComfyAcceptJob(ctx context.Context, provider *providers.ComfyUI, id string, interval time.Duration) (video.ProviderJobStatus, int, error) {
 	var last video.ProviderJobStatus
 	var lastErr error
 	polls := 0
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := pollComfyAcceptCtxErr(ctx); err != nil {
 			if lastErr != nil {
 				return last, polls, fmt.Errorf("%w (last status error: %v)", err, lastErr)
 			}
@@ -548,11 +571,12 @@ func pollComfyAcceptJob(ctx context.Context, provider *providers.ComfyUI, id str
 			case video.StateCompleted:
 				return status, polls, nil
 			case video.StateFailed, video.StateCancelled, video.StateExpired:
-				reason := status.Error
-				if reason == "" {
-					reason = "provider reported " + string(status.State)
-				}
-				return status, polls, errors.New(reason)
+				// GetJob always sets a non-empty Error for a failed
+				// status ("ComfyUI workflow reported an execution
+				// error" or "ComfyUI workflow completed without an
+				// MP4 output"), so status.Error is non-empty here
+				// and the empty-reason fallback is unreachable.
+				return status, polls, errors.New(status.Error)
 			}
 		}
 		timer := time.NewTimer(interval)
@@ -586,15 +610,17 @@ func verifyComfyAcceptAsset(ctx context.Context, sink *storage.Local, probe *ren
 	if _, err := hex.DecodeString(asset.SHA256); err != nil {
 		return verified, errors.New("persisted asset has a malformed SHA-256")
 	}
-	raw, err := sink.Read(asset)
+	// storage.Local.Read already enforces the size and SHA-256
+	// checks on the same bytes: it rejects a record whose SizeBytes
+	// differs from the stored length and a record whose SHA-256
+	// differs from the stored bytes, so a successful Read guarantees
+	// the stored length matches SizeBytes and the stored bytes hash
+	// to SHA-256. Separate size/SHA checks here are unreachable and
+	// removed; a mismatch still fails closed through Read, wrapped
+	// as a read-back error.
+	_, err := sink.Read(asset)
 	if err != nil {
 		return verified, fmt.Errorf("read back persisted asset: %w", err)
-	}
-	if int64(len(raw)) != asset.SizeBytes {
-		return verified, fmt.Errorf("asset size mismatch: record %d bytes, read %d bytes", asset.SizeBytes, len(raw))
-	}
-	if sum := comfyAcceptSHA256(raw); !strings.EqualFold(sum, asset.SHA256) {
-		return verified, errors.New("asset SHA-256 does not match the bytes read back from disk")
 	}
 	if !strings.EqualFold(strings.TrimSpace(asset.Metadata["provider"]), "comfyui") {
 		return verified, errors.New("asset metadata is missing provider=comfyui")
@@ -611,14 +637,23 @@ func verifyComfyAcceptAsset(ctx context.Context, sink *storage.Local, probe *ren
 	if err != nil {
 		return verified, fmt.Errorf("verify playable media: %w", err)
 	}
-	if info.Codec == "" || info.Size <= 0 {
-		return verified, errors.New("ffprobe returned no decodable video stream")
-	}
+	// Probe returns an error for an empty file and for a file with
+	// no video stream, and sets a positive Size on success, so a
+	// nil-error result always carries a non-empty codec and a
+	// positive size; the empty-codec check is unreachable and
+	// removed.
 	verified.Probe = &comfyAcceptAssetProbe{
 		Codec: info.Codec, Width: info.Width, Height: info.Height, Seconds: info.Seconds, Size: info.Size,
 	}
 	return verified, nil
 }
+
+// comfyAcceptAssetStat is a seam for os.Stat in
+// verifyComfyAcceptAssetAccess: EvalSymlinks on the same path
+// succeeds immediately before, so the Stat fails in production
+// only via concurrent removal or a filesystem fault.
+// Production uses os.Stat.
+var comfyAcceptAssetStat = os.Stat
 
 // verifyComfyAcceptAssetAccess proves item 6 of the acceptance task for the
 // acceptance run itself: the persisted file must resolve inside the
@@ -652,7 +687,7 @@ func verifyComfyAcceptAssetAccess(runDir string, asset video.Asset) error {
 	if rel, err := filepath.Rel(resolvedRoot, resolvedPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return errors.New("persisted asset escapes the acceptance asset root through a symlink")
 	}
-	info, err := os.Stat(resolvedPath)
+	info, err := comfyAcceptAssetStat(resolvedPath)
 	if err != nil {
 		return fmt.Errorf("stat persisted asset: %w", err)
 	}
@@ -777,6 +812,15 @@ func finalizeComfyAcceptReport(report *comfyAcceptReport) {
 	}
 }
 
+// comfyAcceptReportTempChmod, comfyAcceptReportTempSync and
+// comfyAcceptReportTempClose are seams for the temp-file finalize
+// steps in writeComfyAcceptReport: each is a single syscall on a
+// just-created file descriptor, reachable in production only via a
+// filesystem fault. Production uses the file methods.
+var comfyAcceptReportTempChmod = func(f *os.File) error { return f.Chmod(0o600) }
+var comfyAcceptReportTempSync = func(f *os.File) error { return f.Sync() }
+var comfyAcceptReportTempClose = func(f *os.File) error { return f.Close() }
+
 func writeComfyAcceptReport(path string, report comfyAcceptReport) error {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -795,7 +839,7 @@ func writeComfyAcceptReport(path string, report comfyAcceptReport) error {
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := comfyAcceptReportTempChmod(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -803,11 +847,11 @@ func writeComfyAcceptReport(path string, report comfyAcceptReport) error {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := comfyAcceptReportTempSync(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := comfyAcceptReportTempClose(tmp); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

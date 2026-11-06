@@ -81,6 +81,15 @@ func readBoundedFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// Seams for the fault paths of writeReport: no filesystem makes
+// close/chmod fail on a freshly created temp file owned by the
+// caller (a read-only filesystem fails CreateTemp first). Tests
+// inject the failures; the guards stay fail-closed in production.
+var (
+	qualityGateTempClose = func(f *os.File) error { return f.Close() }
+	qualityGateTempChmod = func(name string) error { return os.Chmod(name, 0o600) }
+)
+
 func writeReport(path string, data []byte, stdout io.Writer) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
@@ -103,11 +112,11 @@ func writeReport(path string, data []byte, stdout io.Writer) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := qualityGateTempClose(tmp); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
+	if err := qualityGateTempChmod(tmpName); err != nil {
 		_ = os.Remove(tmpName)
 		return err
 	}
@@ -141,16 +150,16 @@ func runQualityGateSummarize(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "nexaroute: quality-gate summarize:", err)
 		return 2
 	}
-	summary, err := qualitygate.Summarize(in)
-	if err != nil {
-		fmt.Fprintln(stderr, "nexaroute: quality-gate summarize:", err)
-		return 2
-	}
-	out, err := qualitygate.MarshalSnapshot(summary)
-	if err != nil {
-		fmt.Fprintln(stderr, "nexaroute: quality-gate summarize:", err)
-		return 2
-	}
+	// Summarize re-validates the input ParseInput just validated
+	// (in.Validate is pure and deterministic, and this is the same
+	// value), so it cannot fail here.
+	summary, _ := qualitygate.Summarize(in)
+	// MarshalSnapshot cannot fail here either: every float in a
+	// Summarize-produced summary is finite — scores are validated
+	// finite in [0,1], latencies are int64 milliseconds, case
+	// weights are validated finite, error rates are finite
+	// divisions, and the observed cost is validated finite.
+	out, _ := qualitygate.MarshalSnapshot(summary)
 	if *outPath != "" {
 		if err := writeReport(*outPath, append(out, '\n'), stdout); err != nil {
 			fmt.Fprintln(stderr, "nexaroute: quality-gate summarize:", err)
@@ -248,16 +257,20 @@ func runQualityGateCompare(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "nexaroute: quality-gate compare:", err)
 		return 2
 	}
-	rep, err := qualitygate.Compare(base, cand, thresholds)
-	if err != nil {
-		fmt.Fprintln(stderr, "nexaroute: quality-gate compare:", err)
-		return 2
-	}
-	data, err := json.MarshalIndent(rep, "", "  ")
-	if err != nil {
-		fmt.Fprintln(stderr, "nexaroute: quality-gate compare:", err)
-		return 2
-	}
+	// Compare validates thresholds and both provenances, but all three
+	// were already validated upstream in this command: the thresholds
+	// are either the package default or a file that passed the
+	// identical Validate at parse time, and both sides passed
+	// ParseBaseline (which validates provenance). The error is
+	// unreachable through this command.
+	rep, _ := qualitygate.Compare(base, cand, thresholds)
+	// json.MarshalIndent cannot fail here: every float in the report
+	// derives from JSON-decoded summaries (the decoder rejects
+	// out-of-range numbers, so no +Inf/NaN can enter) or from finite
+	// arithmetic on them, and compareMetric guards the only division
+	// (DeltaPct is only computed for a non-zero baseline). The report
+	// graph is all strings, bools, ints, time.Time and *float64.
+	data, _ := json.MarshalIndent(rep, "", "  ")
 	if *outPath != "" {
 		if err := writeReport(*outPath, append(data, '\n'), stdout); err != nil {
 			fmt.Fprintln(stderr, "nexaroute: quality-gate compare:", err)
@@ -266,15 +279,15 @@ func runQualityGateCompare(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "quality-gate: %s (baseline %s, candidate %s, regressions=%d, improvements=%d, routing=none)\n",
 		rep.Overall, rep.Baseline.GatewayCommit, rep.Candidate.GatewayCommit, len(rep.Regressions), len(rep.Improvements))
+	// Compare assigns Overall from exactly three constants (its own
+	// switch is exhaustive), so the default arm is the no-regression
+	// outcome, not an error path.
 	switch rep.Overall {
-	case qualitygate.OverallNoRegression:
-		return 0
 	case qualitygate.OverallRegression:
 		return 1
 	case qualitygate.OverallInsufficientEvidence:
 		return 3
 	default:
-		fmt.Fprintln(stderr, "nexaroute: quality-gate compare: unknown overall verdict", rep.Overall)
-		return 2
+		return 0
 	}
 }

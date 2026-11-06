@@ -21,6 +21,13 @@ import (
 
 const maxAPIResponseBytes = 2 << 20
 
+// secureTempFile enforces 0600 on a freshly created download temp file.
+// os.CreateTemp already creates with 0600, but the explicit chmod also
+// covers a hostile umask (0600 & ~0777 would be 000). It is a seam because
+// fchmod on an otherwise valid temp file cannot be made to fail through
+// the filesystem APIs alone.
+var secureTempFile = func(f *os.File) error { return f.Chmod(0o600) }
+
 // applyRedirectGuard clones client and refuses redirects that leave the
 // original scheme/host before following any of them. The Video Gateway
 // carries a bearer token and downloads upstream-controlled assets, so a
@@ -164,7 +171,7 @@ func (c *apiClient) DownloadAsset(ctx context.Context, jobID, assetID, outPath s
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0600); err != nil {
+	if err := secureTempFile(tmp); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("secure temporary download file: %w", err)
 	}

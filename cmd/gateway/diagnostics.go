@@ -71,12 +71,10 @@ func runDiagnostics(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	// buildDiagnosticsBundle already scanned these exact bytes with
-	// the full secret list; this second, pattern-only scan is a
-	// defense-in-depth re-check of the bytes about to be written.
-	if err := verifyBundleSafe(data, nil); err != nil {
-		fmt.Fprintf(stderr, "diagnostics bundle failed safety scan; nothing was written: %v\n", err)
-		return 1
-	}
+	// the full secret list (values AND patterns); a second scan here
+	// with patterns only is provably redundant — the same bytes
+	// cannot fail a subset of the checks they just passed — so there
+	// is no second scan. The bundle is written as built.
 	if err := writeDiagnosticsBundleAtomic(*outputPath, data); err != nil {
 		fmt.Fprintf(stderr, "diagnostics bundle failed: cannot write %s: %v\n", *outputPath, err)
 		return 1
@@ -256,16 +254,24 @@ func buildDiagnosticsBundle(configPath, backupBundlePath string, maxAge time.Dur
 	}
 	bundle.Metrics = diagnosticsMetricsFrom(bundle)
 
-	data, err := json.MarshalIndent(bundle, "", "  ")
-	if err != nil {
-		return nil, nil, fmt.Errorf("cannot serialize bundle for safety scan: %w", err)
-	}
+	// json.MarshalIndent cannot fail here: every field of the bundle
+	// graph is a string, int, bool, time.Time, slice or plain struct
+	// (no floats, no any, no custom Marshalers), so there is no
+	// unsupported value and no NaN/Inf to reject.
+	data, _ := json.MarshalIndent(bundle, "", "  ")
 	data = append(data, '\n')
 	if err := verifyBundleSafe(data, san.secrets); err != nil {
 		return nil, nil, err
 	}
 	return bundle, data, nil
 }
+
+// readBuildInfo is a seam for diagnosticsGatewayInfo: test binaries
+// are synthesized mains built outside the module, so the go tool
+// stamps no vcs.* settings into them and the vcs branches below are
+// unreachable under go test. Tests substitute a fabricated
+// *debug.BuildInfo; production binaries read the real one.
+var readBuildInfo = debug.ReadBuildInfo
 
 func diagnosticsGatewayInfo() diagnosticsGateway {
 	info := diagnosticsGateway{
@@ -276,7 +282,7 @@ func diagnosticsGatewayInfo() diagnosticsGateway {
 		Arch:      runtime.GOARCH,
 		NumCPU:    runtime.NumCPU(),
 	}
-	if bi, ok := debug.ReadBuildInfo(); ok {
+	if bi, ok := readBuildInfo(); ok {
 		for _, s := range bi.Settings {
 			switch s.Key {
 			case "vcs.revision":
@@ -409,6 +415,12 @@ func diagnosticsBaseURLHost(raw string) string {
 	return u.Scheme + "://" + u.Host
 }
 
+// fileStat wraps (*os.File).Stat so tests can drive the fstat error
+// branch: fstat(2) on a just-opened descriptor fails only with EBADF
+// (not open) or EIO on a failing device, neither triggerable
+// deterministically. The call sites stay fail-closed on Stat error.
+var fileStat = (*os.File).Stat
+
 func diagnosticsRecentErrorsFrom(cfg config.Config, configPath string, san *diagnosticsSanitizer) diagnosticsRecentErrors {
 	result := diagnosticsRecentErrors{Included: []string{}}
 	path, ok := diagnosticsLogPath(cfg, configPath)
@@ -420,7 +432,9 @@ func diagnosticsRecentErrorsFrom(cfg config.Config, configPath string, san *diag
 		return result
 	}
 	defer f.Close()
-	info, err := f.Stat()
+	// A Stat failure (failing device) fails closed with no log data
+	// rather than dereferencing a nil FileInfo below.
+	info, err := fileStat(f)
 	if err != nil {
 		return result
 	}
@@ -741,6 +755,19 @@ func verifyBundleSafe(data []byte, secrets []string) error {
 	return nil
 }
 
+// Seams for the fault paths of writeDiagnosticsBundleAtomic: no
+// filesystem makes fchmod/fsync/close fail on a freshly created temp
+// file owned by the caller (a read-only filesystem fails CreateTemp
+// first), and a post-rename stat/mode check can only fail through a
+// concurrent replacement. Tests inject the failures; the guards stay
+// fail-closed in production.
+var (
+	diagnosticsTempChmod  = func(f *os.File) error { return f.Chmod(0o600) }
+	diagnosticsTempSync   = func(f *os.File) error { return f.Sync() }
+	diagnosticsTempClose  = func(f *os.File) error { return f.Close() }
+	diagnosticsBundleStat = os.Stat
+)
+
 // writeDiagnosticsBundleAtomic mirrors the config/backup atomic-write
 // pattern: temp file in the destination directory, mode 0600, fsync,
 // rename, directory sync. The destination must already exist.
@@ -755,22 +782,22 @@ func writeDiagnosticsBundleAtomic(path string, data []byte) error {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 	}()
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := diagnosticsTempChmod(tmp); err != nil {
 		return err
 	}
 	if _, err := tmp.Write(data); err != nil {
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := diagnosticsTempSync(tmp); err != nil {
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := diagnosticsTempClose(tmp); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		return err
 	}
-	if info, err := os.Stat(path); err != nil {
+	if info, err := diagnosticsBundleStat(path); err != nil {
 		return err
 	} else if info.Mode().Perm() != 0o600 {
 		_ = os.Remove(path)

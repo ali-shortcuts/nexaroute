@@ -36,6 +36,16 @@ import (
 var version = "dev"
 var notifyGatewayContext = signal.NotifyContext
 
+// osExit, fatalLog and evalSymlinks are seams so main's startup-failure
+// paths can be tested without killing the test process. Production
+// behaviour is unchanged: osExit calls os.Exit, fatalLog calls
+// Logger.Fatalf (log the message, exit 1), evalSymlinks resolves symlinks.
+var osExit = os.Exit
+var fatalLog = func(l *log.Logger, format string, args ...any) { l.Fatalf(format, args...) }
+var evalSymlinks = filepath.EvalSymlinks
+var osHostname = os.Hostname
+var netListen = net.Listen
+
 func ensureConfig(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -50,6 +60,29 @@ func ensureConfig(path string) error {
 	}
 	cfg := config.Default()
 	return config.SaveAtomic(path, cfg)
+}
+
+// logCloseError logs a deferred cleanup failure; a nil error is silent.
+// It exists so the shutdown close-error branches in main share one testable
+// shape instead of three inline ifs with near-unreachable error returns.
+func logCloseError(logger *log.Logger, label string, err error) {
+	if err != nil {
+		logger.Printf("%s=%v", label, err)
+	}
+}
+
+// initBreakerSync builds the cross-replica breaker syncer over the
+// already-open control-plane store. It is a seam so the two failure modes
+// (a store that cannot be adapted, a syncer that cannot be built) can be
+// tested: neither is reachable through a valid configuration, because main
+// only calls it with a live runtime, a live health manager and a non-empty
+// replica id.
+var initBreakerSync = func(rt *controlPlaneRuntime, hm *health.Manager, replicaID string, interval time.Duration, logf func(string, ...any)) (*breakersync.Syncer, error) {
+	store, err := rt.BreakerStore(replicaID)
+	if err != nil {
+		return nil, err
+	}
+	return breakersync.New(store, hm, breakersync.Options{ReplicaID: replicaID, Interval: interval, Logf: logf})
 }
 
 // dispatchSubcommand routes a known CLI subcommand and returns its exit
@@ -109,7 +142,7 @@ func dispatchSubcommand(args []string, stdin io.Reader, stdout, stderr io.Writer
 func main() {
 	if code, handled := dispatchSubcommand(os.Args[1:], os.Stdin, os.Stdout, os.Stderr); handled {
 		if code != 0 {
-			os.Exit(code)
+			osExit(code)
 		}
 		return
 	}
@@ -124,28 +157,28 @@ func main() {
 	}
 	bootstrap := log.New(os.Stderr, "nexaroute ", log.LstdFlags|log.Lmicroseconds)
 	if *configPath == "" {
-		bootstrap.Fatal("cannot locate user config directory; set HOME, XDG_CONFIG_HOME, or NEXAROUTE_CONFIG")
+		fatalLog(bootstrap, "cannot locate user config directory; set HOME, XDG_CONFIG_HOME, or NEXAROUTE_CONFIG")
 	}
 	absolute, err := filepath.Abs(*configPath)
 	if err != nil {
-		bootstrap.Fatal(err)
+		fatalLog(bootstrap, "%v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
-		bootstrap.Fatal(err)
+		fatalLog(bootstrap, "%v", err)
 	}
-	dir, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+	dir, err := evalSymlinks(filepath.Dir(absolute))
 	if err != nil {
-		bootstrap.Fatal(err)
+		fatalLog(bootstrap, "%v", err)
 	}
 	absolute = filepath.Join(dir, filepath.Base(absolute))
-	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+	if resolved, err := evalSymlinks(absolute); err == nil {
 		absolute = resolved
 	}
 	*configPath = absolute
 
 	processLock, acquired, err := desktop.Acquire(*configPath + ".lock")
 	if err != nil {
-		bootstrap.Fatalf("cannot acquire local gateway lock: %v", err)
+		fatalLog(bootstrap, "cannot acquire local gateway lock: %v", err)
 	}
 	if !acquired {
 		uiURL := dashboardURL(*configPath)
@@ -155,11 +188,11 @@ func main() {
 	defer processLock.Close()
 
 	if err := ensureConfig(*configPath); err != nil {
-		bootstrap.Fatal(err)
+		fatalLog(bootstrap, "%v", err)
 	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		bootstrap.Fatal(err)
+		fatalLog(bootstrap, "%v", err)
 	}
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(os.Stderr, "nexaroute: config warning: %s\n", w)
@@ -169,7 +202,7 @@ func main() {
 	}
 	cpRuntime, err := openControlPlaneRuntime(cfg.ControlPlane, *configPath)
 	if err != nil {
-		bootstrap.Fatalf("cannot initialize control-plane runtime: %v", err)
+		fatalLog(bootstrap, "cannot initialize control-plane runtime: %v", err)
 	}
 
 	var logWriters []io.Writer
@@ -209,14 +242,14 @@ func main() {
 	hm.ConfigureProviderIncidents(cfg.Routing.ProviderFailureThreshold, cfg.ProviderFailureWindow(), cfg.ProviderCooldown())
 	reg, err := providers.NewRegistry(cfg)
 	if err != nil {
-		logger.Fatal(err)
+		fatalLog(logger, "%v", err)
 	}
 	rt := router.New(cfg, hm)
 	bus := events.New(500)
 	pe := probe.New(cfg, reg, rt, hm, bus)
 	api := httpapi.New(cfg, *configPath, reg, rt, hm, bus, pe, logger)
 	if err := api.SecurityStoreError(); err != nil {
-		bootstrap.Fatalf("cannot initialize admin security store: %v", err)
+		fatalLog(bootstrap, "cannot initialize admin security store: %v", err)
 	}
 	// Budget webhook alerts deduplicate across restarts on the durable
 	// control-plane store when one is configured (file, postgres,
@@ -235,18 +268,14 @@ func main() {
 		if endpoint != "" {
 			exporter, err := telemetry.New(endpoint, cfg.Telemetry.ServiceName)
 			if err != nil {
-				bootstrap.Fatalf("cannot initialize telemetry exporter: %v", err)
+				fatalLog(bootstrap, "cannot initialize telemetry exporter: %v", err)
 			}
 			api.SetTelemetryExporter(exporter)
 			defer exporter.Close()
 			logger.Printf("telemetry_otlp_export enabled service=%s", cfg.Telemetry.ServiceName)
 		}
 	}
-	defer func() {
-		if err := api.CloseSecurityStore(); err != nil {
-			logger.Printf("security_store_close_error=%v", err)
-		}
-	}()
+	defer func() { logCloseError(logger, "security_store_close_error", api.CloseSecurityStore()) }()
 	var videoRT *videoRuntime.Runtime
 	if cfg.Video.Enabled {
 		// Universal video planner defaults: point the code-render planner
@@ -338,7 +367,7 @@ func main() {
 			CodeRenderRetentionHours:     cfg.Video.CodeRenderRetentionHours,
 		}, filepath.Dir(*configPath))
 		if err != nil {
-			bootstrap.Fatalf("cannot initialize video gateway: %v", err)
+			fatalLog(bootstrap, "cannot initialize video gateway: %v", err)
 		}
 		api.AttachVideoHandler(videoRT.Handler)
 	}
@@ -348,13 +377,9 @@ func main() {
 	// routes only while a service is attached. The store closer runs
 	// deferred after the HTTP graceful shutdown below.
 	if nexaflowCloser, err := maybeAttachNexaflow(api, cfg, hm, logger); err != nil {
-		bootstrap.Fatalf("cannot initialize nexaflow service: %v", err)
+		fatalLog(bootstrap, "cannot initialize nexaflow service: %v", err)
 	} else if nexaflowCloser != nil {
-		defer func() {
-			if err := nexaflowCloser.Close(); err != nil {
-				logger.Printf("nexaflow_store_close_error=%v", err)
-			}
-		}()
+		defer func() { logCloseError(logger, "nexaflow_store_close_error", nexaflowCloser.Close()) }()
 	}
 	api.SyncCapabilityContracts()
 	pe.SetCapabilityStore(api.CapabilityStore())
@@ -369,7 +394,7 @@ func main() {
 	defer cancel()
 	if videoRT != nil {
 		if err := videoRT.Start(ctx); err != nil {
-			bootstrap.Fatalf("cannot recover video jobs: %v", err)
+			fatalLog(bootstrap, "cannot recover video jobs: %v", err)
 		}
 		defer videoRT.Close()
 	}
@@ -380,30 +405,22 @@ func main() {
 	if cfg.ControlPlane.BreakerSync && cpRuntime != nil {
 		replicaID := cfg.ControlPlane.BreakerSyncReplicaID
 		if replicaID == "" {
-			host, herr := os.Hostname()
+			host, herr := osHostname()
 			if herr != nil || host == "" {
 				host = "unknown-host"
 			}
 			replicaID = fmt.Sprintf("%s-%d", host, os.Getpid())
 		}
-		breakerStore, berr := cpRuntime.BreakerStore(replicaID)
-		if berr != nil {
-			bootstrap.Fatalf("cannot initialize breaker sync: %v", berr)
-		}
-		syncer, serr := breakersync.New(breakerStore, hm, breakersync.Options{
-			ReplicaID: replicaID,
-			Interval:  cfg.BreakerSyncInterval(),
-			Logf:      logger.Printf,
-		})
+		syncer, serr := initBreakerSync(cpRuntime, hm, replicaID, cfg.BreakerSyncInterval(), logger.Printf)
 		if serr != nil {
-			bootstrap.Fatalf("cannot initialize breaker sync: %v", serr)
+			fatalLog(bootstrap, "cannot initialize breaker sync: %v", serr)
 		}
 		go syncer.Run(ctx)
 		logger.Printf("breaker_sync enabled replica=%s interval=%s backend=%s", replicaID, cfg.BreakerSyncInterval(), cfg.ControlPlane.Backend)
 	}
-	listener, err := net.Listen("tcp", cfg.Listen)
+	listener, err := netListen("tcp", cfg.Listen)
 	if err != nil {
-		bootstrap.Fatalf("cannot listen on %s (another instance may be running): %v", cfg.Listen, err)
+		fatalLog(bootstrap, "cannot listen on %s (another instance may be running): %v", cfg.Listen, err)
 	}
 	defer listener.Close()
 	secureListener := cfg.TLS.Enabled
@@ -412,7 +429,7 @@ func main() {
 	if cfg.TLS.Enabled {
 		tlsConfig, tlsErr := transport.ServerTLSConfig(cfg.TLS, filepath.Dir(*configPath))
 		if tlsErr != nil {
-			bootstrap.Fatalf("TLS configuration is invalid: %v", tlsErr)
+			fatalLog(bootstrap, "TLS configuration is invalid: %v", tlsErr)
 		}
 		srv.TLSConfig = tlsConfig
 		serveListener = tls.NewListener(listener, tlsConfig)
@@ -469,13 +486,11 @@ func main() {
 		logger.Printf("shutdown_error=%v", err)
 	}
 	if cpRuntime != nil {
-		if err := cpRuntime.Close(); err != nil {
-			logger.Printf("control_plane_close_error=%v", err)
-		}
+		logCloseError(logger, "control_plane_close_error", cpRuntime.Close())
 	}
 	select {
 	case err := <-serverErr:
-		logger.Fatalf("server_error=%v", err)
+		fatalLog(logger, "server_error=%v", err)
 	default:
 	}
 }
@@ -485,10 +500,8 @@ func dashboardURL(configPath string) string {
 	if err != nil {
 		return "http://127.0.0.1:8080/"
 	}
-	host, port, err := net.SplitHostPort(cfg.Listen)
-	if err != nil {
-		return "http://127.0.0.1:8080/"
-	}
+	// config.Load validates Listen, so SplitHostPort cannot fail here.
+	host, port, _ := net.SplitHostPort(cfg.Listen)
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "127.0.0.1"
 	}

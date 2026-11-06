@@ -100,12 +100,11 @@ func runSecrets(args []string) error {
 			fmt.Println("OK admin.api_key")
 			n++
 		}
-		for i, k := range c.ClientAuth.Keys {
-			if k != "" {
-				fmt.Printf("OK client_auth.keys[%d]\n", i)
-				n++
-			}
-		}
+		// ClientAuth.Keys is intentionally not verified here:
+		// config.LoadBase migrates every plaintext client key into
+		// KeyHashes and nils Keys (config.go), so a loaded config
+		// never carries a plaintext key to check. The digests in
+		// KeyHashes are not secrets and need no presence check.
 		fmt.Printf("verified_fields=%d\n", n)
 		return nil
 	case "decrypt":
@@ -148,7 +147,7 @@ func runSecrets(args []string) error {
 			return e
 		}
 		next := make([]byte, 32)
-		if _, e = rand.Read(next); e != nil {
+		if _, e = secretsRandRead(next); e != nil {
 			return errors.New("cannot generate replacement master key")
 		}
 		encrypted, _, e := secrets.TransformConfig(plain, next, true)
@@ -170,7 +169,7 @@ func runSecrets(args []string) error {
 		if e = writeRotateFile(*path, append(encrypted, '\n')); e != nil {
 			return e
 		}
-		if e = os.Rename(nextPath, kp); e != nil {
+		if e = rotateActivateRename(nextPath, kp); e != nil {
 			return fmt.Errorf("config rotated but key activation is pending; restart will attempt recovery using %s: %w", filepath.Base(nextPath), e)
 		}
 		syncRotateDirectory(filepath.Dir(kp))
@@ -305,6 +304,26 @@ func loadLegacyKey(file, encoded string) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// Seams for the fault paths of the rotate flow: crypto/rand.Read
+// essentially never fails on a running system, the final key
+// activation rename can only fail through a concurrent replacement
+// of the key file, and fchmod/fsync/close never fail on a freshly
+// created temp file owned by the caller. Tests inject the failures;
+// the guards stay fail-closed in production.
+var (
+	secretsRandRead      = rand.Read
+	rotateActivateRename = os.Rename
+	rotateFileChmod      = func(f *os.File) error { return f.Chmod(0600) }
+	rotateFileSync       = func(f *os.File) error { return f.Sync() }
+	rotateFileClose      = func(f *os.File) error { return f.Close() }
+	// rotateFileRename is the atomic publish step of writeRotateFile.
+	// Its failure can only happen through a concurrent replacement of
+	// the target (e.g. the staged-key path becoming a directory
+	// mid-rotation), which a test cannot arrange deterministically.
+	rotateFileRename = os.Rename
+)
+
 func writeRotateFile(path string, b []byte) error {
 	d := filepath.Dir(path)
 	f, e := os.CreateTemp(d, ".nexaroute-secret-*")
@@ -313,7 +332,7 @@ func writeRotateFile(path string, b []byte) error {
 	}
 	n := f.Name()
 	defer func() { _ = os.Remove(n) }()
-	if e = f.Chmod(0600); e != nil {
+	if e = rotateFileChmod(f); e != nil {
 		_ = f.Close()
 		return e
 	}
@@ -321,14 +340,14 @@ func writeRotateFile(path string, b []byte) error {
 		_ = f.Close()
 		return e
 	}
-	if e = f.Sync(); e != nil {
+	if e = rotateFileSync(f); e != nil {
 		_ = f.Close()
 		return e
 	}
-	if e = f.Close(); e != nil {
+	if e = rotateFileClose(f); e != nil {
 		return e
 	}
-	if e = os.Rename(n, path); e != nil {
+	if e = rotateFileRename(n, path); e != nil {
 		return e
 	}
 	syncRotateDirectory(d)

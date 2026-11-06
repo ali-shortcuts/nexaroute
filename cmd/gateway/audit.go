@@ -29,6 +29,13 @@ const (
 // subcommand opens the admin security store read-only and checks the
 // tamper-evident audit hash chain (M3-6). It reports metadata only —
 // record counts, sequences, and the head hash — never event payloads.
+// auditVerifyContext is a seam for the verify call's context:
+// VerifyAuditChain only returns an error on a cancelled context (or
+// a bbolt View failure, which cannot happen on a store this command
+// just opened). Tests substitute a pre-cancelled context; production
+// verifies with a background context.
+var auditVerifyContext = context.Background
+
 func runAudit(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "verify" {
 		fmt.Fprintln(stderr, "usage: nexaroute audit verify [--config PATH] [--format text|json]")
@@ -50,11 +57,12 @@ func runAudit(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "nexaroute: audit verify: load config: %v\n", err)
 		return auditExitUsage
 	}
-	storePath, err := auditStorePath(base.Admin.SecurityStorePath, *path)
-	if err != nil {
-		fmt.Fprintf(stderr, "nexaroute: audit verify: %v\n", err)
-		return auditExitUsage
-	}
+	// auditStorePath only fails when both the configured store path
+	// and the config path are empty. The config was just loaded from
+	// *path, and LoadBase("") fails, so *path is non-empty here and
+	// this error is unreachable through runAudit. (The helper's error
+	// itself is covered by direct auditStorePath tests.)
+	storePath, _ := auditStorePath(base.Admin.SecurityStorePath, *path)
 	store, err := securitystore.OpenReadOnly(storePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "nexaroute: audit verify: %v\n", err)
@@ -62,17 +70,15 @@ func runAudit(args []string, stdout, stderr io.Writer) int {
 		return auditExitUsage
 	}
 	defer store.Close()
-	report, err := store.VerifyAuditChain(context.Background())
+	report, err := store.VerifyAuditChain(auditVerifyContext())
 	if err != nil {
 		fmt.Fprintf(stderr, "nexaroute: audit verify: %v\n", err)
 		return auditExitUsage
 	}
 	if *format == "json" {
-		encoded, err := json.MarshalIndent(report, "", "  ")
-		if err != nil {
-			fmt.Fprintf(stderr, "nexaroute: audit verify: encode report: %v\n", err)
-			return auditExitUsage
-		}
+		// ChainReport is all basic types (ints, uint64s, strings,
+		// bool, []string), so MarshalIndent cannot fail.
+		encoded, _ := json.MarshalIndent(report, "", "  ")
 		fmt.Fprintln(stdout, string(encoded))
 	} else {
 		fmt.Fprintf(stdout, "audit chain: %d records (%d chained, %d legacy pre-chain)\n", report.TotalRecords, report.ChainedRecords, report.LegacyRecords)

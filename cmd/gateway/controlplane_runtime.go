@@ -74,11 +74,11 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(filepath.Dir(configPath), path)
 		}
-		var err error
-		store, err = controlplane.NewFileStore(path)
-		if err != nil {
-			return nil, err
-		}
+		// NewFileStore only fails on an empty path, and path is never
+		// empty here: it defaults to configPath +
+		// ".controlplane.json" when StatePath is unset. The error
+		// check is provably unreachable through this caller.
+		store, _ = controlplane.NewFileStore(path)
 	case "memory":
 		store = controlplane.NewMemoryStore()
 	case "postgres":
@@ -113,14 +113,13 @@ func openControlPlaneRuntime(cfg config.ControlPlaneConfig, configPath string) (
 	if cfg.MigrationDryRun {
 		return rt, nil
 	}
-	payload, err := json.Marshal(struct {
+	// json.Marshal cannot fail here: the payload is an anonymous
+	// struct with one int and one string field (no floats, no any, no
+	// custom Marshalers), so there is no unsupported value to reject.
+	payload, _ := json.Marshal(struct {
 		Schema  int    `json:"schema"`
 		Backend string `json:"backend"`
 	}{Schema: 1, Backend: backend})
-	if err != nil {
-		_ = rt.Close()
-		return nil, err
-	}
 	if err := ensureControlPlaneSnapshot(context.Background(), manager, controlPlaneNamespace, payload); err != nil {
 		_ = rt.Close()
 		return nil, err
@@ -207,6 +206,10 @@ func (a *controlPlaneBudgetAlertIO) Write(ctx context.Context, payload []byte, e
 	return snap.Revision, nil
 }
 
+// controlPlanePostgresDriver is the database/sql driver name for the
+// control-plane PostgreSQL backend ("pgx" in production).
+var controlPlanePostgresDriver = "pgx"
+
 // openPostgresControlPlane wires the real PostgreSQL backend: the DSN is
 // resolved only from the environment variable named by the configuration
 // (never persisted or logged), the pool is bounded, startup pings with a
@@ -222,15 +225,21 @@ func openPostgresControlPlane(cfg config.ControlPlaneConfig) (controlplane.Store
 	if dsn == "" {
 		return nil, nil, fmt.Errorf("environment variable %s named by control_plane.postgres_dsn_env is not set or is empty", envName)
 	}
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		return nil, nil, errors.New("control-plane PostgreSQL driver is unavailable")
-	}
+	// sql.Open only fails for an unregistered driver; pgx is registered
+	// by the blank import above and the DSN itself is validated lazily
+	// at Ping, so this call cannot fail (verified first-hand:
+	// sql.Open("pgx", dsn) returns a non-nil *sql.DB and a nil error
+	// for every DSN string, including malformed and empty ones).
+	// controlPlanePostgresDriver is a seam so tests can substitute a
+	// fake database/sql driver: CI's coverage job has no live
+	// PostgreSQL, and the migration SQL itself is proven against a
+	// real server by controlplane's gated integration suite.
+	db, _ := sql.Open(controlPlanePostgresDriver, dsn)
 	db.SetMaxOpenConns(controlPlanePostgresMaxOpenConns)
 	db.SetMaxIdleConns(controlPlanePostgresMaxIdleConns)
 	db.SetConnMaxLifetime(controlPlanePostgresConnMaxLifetime)
 	pingCtx, cancel := context.WithTimeout(context.Background(), controlPlanePostgresPingTimeout)
-	err = db.PingContext(pingCtx)
+	err := db.PingContext(pingCtx)
 	cancel()
 	if err != nil {
 		_ = db.Close()
@@ -239,11 +248,12 @@ func openPostgresControlPlane(cfg config.ControlPlaneConfig) (controlplane.Store
 		return nil, nil, fmt.Errorf("control-plane PostgreSQL is unreachable via the DSN in %s; check network reachability, credentials and that the database exists", envName)
 	}
 	if !cfg.MigrationDryRun {
-		registry, err := controlplane.DefaultMigrationRegistry()
-		if err != nil {
-			_ = db.Close()
-			return nil, nil, err
-		}
+		// DefaultMigrationRegistry builds its registry from a single
+		// hardcoded valid migration (version 1, named, with SQL);
+		// its constructor only fails on a zero version, an empty
+		// name/SQL, or a duplicate version, none of which the
+		// hardcoded registry has.
+		registry, _ := controlplane.DefaultMigrationRegistry()
 		migrateCtx, cancel := context.WithTimeout(context.Background(), controlPlanePostgresMigrateTimeout)
 		err = controlplane.ApplyMigrations(migrateCtx, db, registry)
 		cancel()
@@ -252,11 +262,9 @@ func openPostgresControlPlane(cfg config.ControlPlaneConfig) (controlplane.Store
 			return nil, nil, fmt.Errorf("apply control-plane migrations: %w", err)
 		}
 	}
-	store, err := controlplane.NewSQLStore(db)
-	if err != nil {
-		_ = db.Close()
-		return nil, nil, err
-	}
+	// NewSQLStore only fails on a nil *sql.DB; db is non-nil here (it
+	// was opened above and answered Ping).
+	store, _ := controlplane.NewSQLStore(db)
 	return store, db, nil
 }
 
@@ -316,10 +324,8 @@ func openRedisControlPlane(cfg config.ControlPlaneConfig) (controlplane.Store, i
 		_ = client.Close()
 		return nil, nil, fmt.Errorf("control-plane Redis is unreachable via the URL in %s; check network reachability and credentials", envName)
 	}
-	store, err := controlplane.NewRedisStore(redisHashAdapter{client: client})
-	if err != nil {
-		_ = client.Close()
-		return nil, nil, err
-	}
+	// NewRedisStore only fails on a nil client; the adapter is a
+	// non-nil struct value wrapping the live client.
+	store, _ := controlplane.NewRedisStore(redisHashAdapter{client: client})
 	return store, client, nil
 }

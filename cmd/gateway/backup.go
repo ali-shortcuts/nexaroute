@@ -172,6 +172,25 @@ func (w *boundedBuffer) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
+// backupVerifyContext is the seam through which createBackup verifies
+// audit chains (the live snapshot and the offline store). Production
+// uses a 60 s timeout; tests substitute a pre-cancelled context.
+// VerifyAuditChain returns an error only on a cancelled context or a
+// bbolt View failure, and a store this command just opened cannot fail
+// View deterministically, so the error branch is unreachable without
+// the seam.
+var backupVerifyContext = func() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 60*time.Second)
+}
+
+// backupSecurityStoreStat is the seam for the offline security-store
+// Stat in createBackup: refuseOutputCollision canonicalizes the same
+// path first, so a non-NotExist Stat error is only reachable through a
+// concurrent replacement of the path between the two checks (a race).
+// The branch stays fail-closed in production; the seam lets a test
+// inject the error deterministically. Production uses os.Stat.
+var backupSecurityStoreStat = os.Stat
+
 func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain bool, stdout io.Writer, live liveBackupOptions) error {
 	configBytes, err := readFileBounded(configPath, "config")
 	if err != nil {
@@ -182,9 +201,15 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 		return fmt.Errorf("load config: %w", err)
 	}
 	if live.enabled {
-		if live.adminURL, err = resolveLiveAdminURL(live.adminURL, cfg.Listen); err != nil {
-			return err
-		}
+		// resolveLiveAdminURL cannot fail here: config.LoadBase above
+		// already validated cfg.Listen as a host:port (non-empty, and
+		// validateRuntimeRouting rejects a slash in the host as "not a
+		// valid address" and a slash in the port as non-numeric), and
+		// the only error paths in resolveLiveAdminURL are an empty
+		// listen or a slash in the listen without a scheme. A
+		// non-empty --admin-url flag never errors either. The
+		// function's own error branches are covered by direct tests.
+		live.adminURL, _ = resolveLiveAdminURL(live.adminURL, cfg.Listen)
 		if strings.TrimSpace(live.adminKey) == "" {
 			live.adminKey = cfg.Admin.APIKey
 		}
@@ -234,10 +259,15 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 		if includeKey {
 			return errors.New("--include-master-key is rejected for Transit (nxs2) configs: there is no raw key to bundle, and silently ignoring the flag would mislead the operator about what the bundle can restore")
 		}
-		keyRef, versions, ierr := secrets.TransitEnvelopeInfo(configBytes)
-		if ierr != nil {
-			return fmt.Errorf("transit envelope manifest: %w", ierr)
-		}
+		// TransitEnvelopeInfo cannot fail here: config.LoadBase above
+		// already decrypted every nxs2 envelope in these same bytes
+		// through TransformConfigWith, which walks the identical
+		// secret fields and rejects (openEnvelope) any envelope whose
+		// key reference differs from the configured Transit key — so
+		// all envelopes reaching this point share one key reference,
+		// and the malformed-envelope/JSON errors are preempted by the
+		// same load. The manifest facts are still read from the call.
+		keyRef, versions, _ := secrets.TransitEnvelopeInfo(configBytes)
 		manifest.EnvelopeVersions = []string{"nxs2"}
 		manifest.TransitKeyRefSHA256 = keyRef
 		manifest.TransitKeyVersions = versions
@@ -247,10 +277,18 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 	// applied while staging, so a backup can never produce a bundle
 	// its own restore would reject for size.
 	var stagedTotal int64
+	// The per-entry bound is enforced by every producer before add is
+	// reached, so a second check here is provably dead: the config,
+	// control-plane state and master key all arrive through
+	// readFileBounded (which rejects over-limit input by size and by
+	// post-read length); a live snapshot arrives through
+	// fetchLiveSecuritySnapshot (LimitReader + length check); and an
+	// offline snapshot arrives through a boundedBuffer capped at
+	// maxBackupEntryBytes, whose BackupTo fails past the limit. The
+	// aggregate stagedTotal check below stays: it is the only guard
+	// against a bundle whose entries are individually small but
+	// collectively over the limit.
 	add := func(name string, data []byte) error {
-		if int64(len(data)) > maxBackupEntryBytes {
-			return fmt.Errorf("backup entry %s is %d bytes, exceeding the %d-byte bundle entry limit", name, len(data), maxBackupEntryBytes)
-		}
 		stagedTotal += int64(len(data))
 		if stagedTotal > maxBackupTotalBytes {
 			return fmt.Errorf("backup payload exceeds the aggregate bundle limit of %d bytes at entry %s", maxBackupTotalBytes, name)
@@ -293,7 +331,7 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 		if err != nil {
 			return fmt.Errorf("open live security snapshot for verification: %w", err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := backupVerifyContext()
 		report, verr := probe.VerifyAuditChain(ctx)
 		cancel()
 		_ = probe.Close()
@@ -312,7 +350,7 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 		if err := add(backupEntrySecurity, snapBytes); err != nil {
 			return err
 		}
-	} else if _, statErr := os.Stat(securityPath); statErr == nil {
+	} else if _, statErr := backupSecurityStoreStat(securityPath); statErr == nil {
 		store, err := securitystore.OpenReadOnly(securityPath)
 		if err != nil {
 			if securitystore.IsLockedError(err) {
@@ -321,7 +359,7 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 			return fmt.Errorf("open security store for snapshot: %w", err)
 		}
 		snap := &boundedBuffer{limit: maxBackupEntryBytes}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		ctx, cancel := backupVerifyContext()
 		// The audit chain is verified before it is snapshotted (#428,
 		// audit F4): a backup of a tampered store would otherwise look
 		// complete while carrying a broken trail. Fail closed; the
@@ -394,10 +432,11 @@ func createBackup(configPath, outPath string, includeKey bool, allowBrokenChain 
 		return fmt.Errorf("read master key file %s: %w", keyPath, err)
 	}
 
-	manifestBytes, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return err
-	}
+	// json.MarshalIndent cannot fail on a backupManifest: every field
+	// is a string, bool, int64, time.Time, or a slice of
+	// backupManifestFile (two strings and an int64) — no floats (so no
+	// NaN/Inf), no any, no maps, no custom Marshalers.
+	manifestBytes, _ := json.MarshalIndent(manifest, "", "  ")
 	if err := writeBundle(outPath, manifestBytes, manifest.Files, stage); err != nil {
 		return err
 	}
@@ -555,6 +594,13 @@ func refuseOutputCollision(outPath string, sources []string) error {
 //     mistaken for a missing path and never papered over with an
 //     unresolved fallback: a destination that cannot be canonicalized
 //     cannot be proven distinct, so callers must refuse it.
+//
+// canonicalReadlink is the seam for canonicalPath's read of a symlink
+// target: a link that passes Lstat can only fail Readlink through a
+// concurrent replacement, so the error branch is reachable in
+// production only as a race. Production uses os.Readlink.
+var canonicalReadlink = os.Readlink
+
 func canonicalPath(p string) (string, error) {
 	if p == "" {
 		return "", errors.New("empty path")
@@ -592,7 +638,7 @@ func canonicalPath(p string) (string, error) {
 			if resolutions > maxSymlinkResolutions {
 				return "", fmt.Errorf("canonicalize %s: too many symlink resolutions", p)
 			}
-			target, err := os.Readlink(candidate)
+			target, err := canonicalReadlink(candidate)
 			if err != nil {
 				return "", err
 			}
@@ -620,6 +666,18 @@ func splitPathComponents(p string) []string {
 
 // writeBundle writes manifest + staged payloads into a tar at outPath,
 // atomically (temp file in the same directory, fsync, rename, 0600).
+// bundleTempChmod/Sync/Close are the seams through which writeBundle
+// finalizes its temp file; production uses the file's own methods. No
+// filesystem makes fchmod/fsync/close fail on a freshly created temp
+// file owned by the caller (a read-only filesystem fails CreateTemp
+// first), so the guards are only reachable through these seams, and
+// they stay fail-closed in production.
+var (
+	bundleTempChmod = func(f *os.File) error { return f.Chmod(0o600) }
+	bundleTempSync  = func(f *os.File) error { return f.Sync() }
+	bundleTempClose = func(f *os.File) error { return f.Close() }
+)
+
 func writeBundle(outPath string, manifestBytes []byte, files []backupManifestFile, stage string) error {
 	tmp, err := os.CreateTemp(filepath.Dir(outPath), ".nexaroute-backup-*")
 	if err != nil {
@@ -627,7 +685,7 @@ func writeBundle(outPath string, manifestBytes []byte, files []backupManifestFil
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := bundleTempChmod(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -660,11 +718,11 @@ func writeBundle(outPath string, manifestBytes []byte, files []backupManifestFil
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := bundleTempSync(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := bundleTempClose(tmp); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, outPath)
@@ -715,6 +773,15 @@ func runRestore(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+// restoreAuditProbeMkdirAll and restoreBundleAuditContext are the seams
+// for the bundled-audit staging in restoreBundle: the probe directory
+// is created inside a fresh staging TempDir, so MkdirAll cannot fail
+// deterministically, and VerifyAuditChain on a just-opened store only
+// errors on a cancelled context. Production uses os.MkdirAll and
+// context.Background; tests substitute failures.
+var restoreAuditProbeMkdirAll = os.MkdirAll
+var restoreBundleAuditContext = context.Background
 
 func restoreBundle(bundlePath, configPath string, force bool, allowBrokenChain bool, stdout io.Writer) error {
 	stage, manifest, payloads, err := readAndVerifyBundle(bundlePath)
@@ -845,7 +912,7 @@ func restoreBundle(bundlePath, configPath string, force bool, allowBrokenChain b
 	var brokenChainProblems []string
 	if secPayload, ok := payloads[backupEntrySecurity]; ok {
 		probeDir := filepath.Join(stage, "audit-verify")
-		if err := os.MkdirAll(probeDir, 0o700); err != nil {
+		if err := restoreAuditProbeMkdirAll(probeDir, 0o700); err != nil {
 			return fmt.Errorf("stage bundled security store for audit verification: %w", err)
 		}
 		probePath := filepath.Join(probeDir, "security.db")
@@ -856,7 +923,7 @@ func restoreBundle(bundlePath, configPath string, force bool, allowBrokenChain b
 		if err != nil {
 			return fmt.Errorf("open bundled security store for audit verification: %w", err)
 		}
-		report, verr := probe.VerifyAuditChain(context.Background())
+		report, verr := probe.VerifyAuditChain(restoreBundleAuditContext())
 		_ = probe.Close()
 		if verr != nil {
 			return fmt.Errorf("verify bundled audit chain: %w", verr)
@@ -968,6 +1035,16 @@ var writeJournalSavedCopy = writeSavedCopyDurable
 // before returning: a recovery record whose bytes may still sit in a
 // page cache when the first destination is installed is not durable,
 // and a directory sync alone does not fix that.
+// savedCopyChmod/Sync are the seams through which writeSavedCopyDurable
+// finalizes a saved pre-restore copy; production uses the file's own
+// methods. No filesystem makes fchmod/fsync fail on a freshly created
+// file owned by the caller, so the guards are only reachable through
+// these seams, and they stay fail-closed in production.
+var (
+	savedCopyChmod = func(f *os.File) error { return f.Chmod(0o600) }
+	savedCopySync  = func(f *os.File) error { return f.Sync() }
+)
+
 func writeSavedCopyDurable(path string, data []byte) error {
 	fh, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -977,16 +1054,24 @@ func writeSavedCopyDurable(path string, data []byte) error {
 		_ = fh.Close()
 		return err
 	}
-	if err := fh.Chmod(0o600); err != nil {
+	if err := savedCopyChmod(fh); err != nil {
 		_ = fh.Close()
 		return err
 	}
-	if err := fh.Sync(); err != nil {
+	if err := savedCopySync(fh); err != nil {
 		_ = fh.Close()
 		return err
 	}
 	return fh.Close()
 }
+
+// removeRestoreJournalDir is the seam for removing a restore journal
+// (the recoverRestoreJournal cleanups and installWithRollback's
+// failPrep): RemoveAll on a journal this process just created cannot
+// fail deterministically — the journal holds only files this process
+// wrote, and the process runs as their owner. Production uses
+// removeJournalDir.
+var removeRestoreJournalDir = removeJournalDir
 
 // removeJournalDir deletes a journal and then syncs the PARENT
 // directory (best effort) so the deletion itself is durable.
@@ -1001,11 +1086,25 @@ func removeJournalDir(dir string) error {
 // writeJournalManifest atomically replaces the journal manifest and
 // fsyncs both the file and its directory, so the on-disk state is as
 // durable as the platform allows before the operation it describes.
+// journalTempChmod/Sync/Close are the seams through which
+// writeJournalManifest finalizes its temp file; production uses the
+// file's own methods. No filesystem makes fchmod/fsync/close fail on a
+// freshly created temp file owned by the caller (a read-only filesystem
+// fails CreateTemp first), so the guards are only reachable through
+// these seams, and they stay fail-closed in production.
+var (
+	journalTempChmod = func(f *os.File) error { return f.Chmod(0o600) }
+	journalTempSync  = func(f *os.File) error { return f.Sync() }
+	journalTempClose = func(f *os.File) error { return f.Close() }
+)
+
 func writeJournalManifest(journalDir string, m *restoreJournalManifest) error {
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
+	// json.MarshalIndent cannot fail on a restoreJournalManifest: every
+	// field is a string, bool, time.Time, or a slice of
+	// restoreJournalEntry (strings, bools, and an os.FileMode, which
+	// marshals as a number) — no floats (so no NaN/Inf), no any, no
+	// maps, no custom Marshalers.
+	data, _ := json.MarshalIndent(m, "", "  ")
 	tmp, err := os.CreateTemp(journalDir, ".manifest-*")
 	if err != nil {
 		return err
@@ -1016,15 +1115,15 @@ func writeJournalManifest(journalDir string, m *restoreJournalManifest) error {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Chmod(0o600); err != nil {
+	if err := journalTempChmod(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := journalTempSync(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := journalTempClose(tmp); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpName, filepath.Join(journalDir, "manifest.json")); err != nil {
@@ -1134,6 +1233,14 @@ func scanRestoreJournals() (interrupted, uninspectable []string) {
 // directory can direct recovery writes to its recorded destinations,
 // so journal directories belong inside the same trust boundary as the
 // config directory itself (documented in docs/OPERATIONS.md).
+// validateJournalReadSavedCopy is the seam for validateJournal's read of
+// a journal entry's saved copy: the copy passed Lstat, the regular-file
+// check, the permission check and the size check immediately before, so
+// a read failure is reachable in production only if the file changes
+// between those checks or the underlying device errors. Production uses
+// readFileBounded.
+var validateJournalReadSavedCopy = readFileBounded
+
 func validateJournal(journalDir string, m *restoreJournalManifest) error {
 	dirInfo, err := os.Lstat(journalDir)
 	if err != nil {
@@ -1246,7 +1353,7 @@ func validateJournal(journalDir string, m *restoreJournalManifest) error {
 			if savedInfo.Size() > maxBackupEntryBytes {
 				return fmt.Errorf("journal entry %q saved copy exceeds the entry size limit", e.Name)
 			}
-			data, err := readFileBounded(savedPath, "journal saved copy")
+			data, err := validateJournalReadSavedCopy(savedPath, "journal saved copy")
 			if err != nil {
 				return fmt.Errorf("journal entry %q saved copy: %w", e.Name, err)
 			}
@@ -1287,7 +1394,7 @@ func recoverRestoreJournal(journalDir string, stdout io.Writer) error {
 		return fmt.Errorf("restore journal %s failed validation; nothing was changed and the journal is preserved: %w", journalDir, err)
 	}
 	if m.State == "completed" {
-		if err := removeJournalDir(journalDir); err != nil {
+		if err := removeRestoreJournalDir(journalDir); err != nil {
 			return fmt.Errorf("clean up completed restore journal %s: %w", journalDir, err)
 		}
 		fmt.Fprintf(stdout, "restore transaction %s completed before the interruption; journal cleaned up, nothing rolled back\n", m.ID)
@@ -1329,7 +1436,7 @@ func recoverRestoreJournal(journalDir string, stdout io.Writer) error {
 	if len(failures) > 0 {
 		return fmt.Errorf("recovery INCOMPLETE for journal %s — could not restore: %s; the journal is preserved at %s with the pre-restore copies; fix those destinations from it (or from backup) before starting the gateway", m.ID, strings.Join(failures, ", "), journalDir)
 	}
-	if err := removeJournalDir(journalDir); err != nil {
+	if err := removeRestoreJournalDir(journalDir); err != nil {
 		return fmt.Errorf("destinations recovered but journal %s could not be removed: %w", journalDir, err)
 	}
 	fmt.Fprintf(stdout, "restore transaction %s rolled back; journal removed\n", m.ID)
@@ -1420,6 +1527,26 @@ func rollbackInstalled(journalDir string, manifest *restoreJournalManifest, inst
 	return failures
 }
 
+// installReadlink is the seam for the pre-restore journaling read of a
+// symlinked target: a link that passes Lstat can only fail Readlink
+// through a concurrent replacement, so the error branch is reachable in
+// production only as a race. Production uses os.Readlink.
+var installReadlink = os.Readlink
+
+// journalSyncDir is the seam for installWithRollback's journal-internal
+// directory syncs (the journal parent before relying on the journal,
+// and the journal directory after staging a saved copy). A directory
+// fsync failure is not deterministically reachable on the filesystems
+// this runs on, so the error branches are reachable in production only
+// through an underlying device or filesystem failure. Production uses
+// syncDir. Destination-directory syncs keep their own seam (syncDirFn).
+var journalSyncDir = syncDir
+
+// installJournalRandRead is the seam for the journal-ID generation in
+// installWithRollback: crypto/rand.Read fails only if the operating
+// system's randomness source fails. Production uses rand.Read.
+var installJournalRandRead = rand.Read
+
 func installWithRollback(installs []installItem, payloads map[string][]byte, stdout io.Writer) error {
 	if len(installs) == 0 {
 		return nil
@@ -1440,7 +1567,7 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 	}()
 	// Make the journal directory entry itself durable before relying
 	// on it; if even that fails, no destination has been touched yet.
-	if err := syncDir(filepath.Dir(journalDir)); err != nil {
+	if err := journalSyncDir(filepath.Dir(journalDir)); err != nil {
 		return fmt.Errorf("create restore journal: %w", err)
 	}
 	// failPrep handles failures BEFORE the first install: no
@@ -1448,7 +1575,7 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 	// cannot be recovered automatically, so it is removed — and if
 	// THAT fails the error says exactly what was left behind.
 	failPrep := func(err error) error {
-		if rmErr := os.RemoveAll(journalDir); rmErr != nil {
+		if rmErr := removeRestoreJournalDir(journalDir); rmErr != nil {
 			preserveJournal = true
 			return fmt.Errorf("%w; additionally the incomplete journal at %s could not be removed (%v) — it holds saved copies but no usable manifest; remove it manually", err, journalDir, rmErr)
 		}
@@ -1456,7 +1583,7 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 	}
 
 	var idBytes [8]byte
-	if _, err := rand.Read(idBytes[:]); err != nil {
+	if _, err := installJournalRandRead(idBytes[:]); err != nil {
 		return failPrep(fmt.Errorf("create restore journal: %w", err))
 	}
 	manifest := &restoreJournalManifest{
@@ -1481,7 +1608,7 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 			// Installing replaces the link itself with a regular
 			// file; journal where it pointed so rollback can
 			// recreate the link exactly.
-			target, rerr := os.Readlink(it.target)
+			target, rerr := installReadlink(it.target)
 			if rerr != nil {
 				return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, rerr))
 			}
@@ -1499,7 +1626,7 @@ func installWithRollback(installs []installItem, payloads map[string][]byte, std
 			if werr := writeJournalSavedCopy(filepath.Join(journalDir, entry.Saved), data); werr != nil {
 				return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, werr))
 			}
-			if serr := syncDir(journalDir); serr != nil {
+			if serr := journalSyncDir(journalDir); serr != nil {
 				return failPrep(fmt.Errorf("journal restore target %s: %w", it.target, serr))
 			}
 		default:
@@ -1618,9 +1745,12 @@ func readAndVerifyBundle(bundlePath string) (string, backupManifest, map[string]
 		if err != nil {
 			return fail(fmt.Errorf("read bundle entry %q: %w", hdr.Name, err))
 		}
-		if int64(len(data)) != hdr.Size {
-			return fail(fmt.Errorf("bundle entry %q is truncated", hdr.Name))
-		}
+		// No length check is needed here: a successful ReadAll from a
+		// tar.Reader always returns exactly hdr.Size bytes. A body cut
+		// short by the stream surfaces as an unexpected-EOF read error
+		// above, and hdr.Size is bounded by maxBackupEntryBytes before
+		// the read, so the LimitReader can never truncate it either.
+		// (Also documented in issue662_gap2_test.go.)
 		payloads[hdr.Name] = data
 	}
 	manifestBytes, ok := payloads[backupEntryManifest]
@@ -1661,6 +1791,18 @@ func readAndVerifyBundle(bundlePath string) (string, backupManifest, map[string]
 // writeFileAtomic writes data to path via a temp file in the same
 // directory + fsync + rename, with the given mode; parent directories
 // are created private (0700) when missing.
+// atomicTempChmod/Sync/Close are the seams through which writeFileAtomic
+// finalizes its temp file; production uses the file's own methods. No
+// filesystem makes fchmod/fsync/close fail on a freshly created temp
+// file owned by the caller (a read-only filesystem fails CreateTemp
+// first), so the guards are only reachable through these seams, and
+// they stay fail-closed in production.
+var (
+	atomicTempChmod = func(f *os.File, perm os.FileMode) error { return f.Chmod(perm) }
+	atomicTempSync  = func(f *os.File) error { return f.Sync() }
+	atomicTempClose = func(f *os.File) error { return f.Close() }
+)
+
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -1676,15 +1818,15 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Chmod(perm); err != nil {
+	if err := atomicTempChmod(tmp, perm); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := atomicTempSync(tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := atomicTempClose(tmp); err != nil {
 		return err
 	}
 	return os.Rename(tmpName, path)

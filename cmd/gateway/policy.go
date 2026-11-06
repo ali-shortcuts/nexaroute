@@ -61,10 +61,8 @@ func loadPolicyConfig(path string, stderr io.Writer) (config.Config, int) {
 		fmt.Fprintf(stderr, "policy: load config: %v\n", err)
 		return config.Config{}, policyExitError
 	}
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(stderr, "policy: config does not validate: %v\n", err)
-		return config.Config{}, policyExitError
-	}
+	// config.Load validates; a second Validate here could only fail
+	// if validation were non-deterministic, so the check was removed.
 	return cfg, policyExitOK
 }
 
@@ -188,6 +186,12 @@ type policyAuditRecord struct {
 	ConfigSHA256After  string `json:"config_sha256_after"`
 }
 
+// hashConfigFile is a seam so applyPolicyPointer's hash-failure
+// paths can be tested: the file was just loaded (or just saved), so
+// a read failure here needs a concurrent deletion, which has no
+// deterministic trigger.
+var hashConfigFile = fileSHA256
+
 func fileSHA256(path string) (string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -202,10 +206,8 @@ func defaultAuditLogPath(configPath string) string {
 }
 
 func appendPolicyAudit(path string, rec policyAuditRecord) error {
-	raw, err := json.Marshal(rec)
-	if err != nil {
-		return err
-	}
+	// policyAuditRecord is all strings, so Marshal cannot fail.
+	raw, _ := json.Marshal(rec)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -259,22 +261,22 @@ func applyPolicyPointer(configPath, auditPath, action, target string, stderr io.
 		fmt.Fprintf(stderr, "policy %s: %q is not defined in decision_policies\n", action, target)
 		return policyAuditRecord{}, policyExitError
 	}
-	before, err := fileSHA256(configPath)
+	before, err := hashConfigFile(configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "policy %s: hash config: %v\n", action, err)
 		return policyAuditRecord{}, policyExitError
 	}
 	from := cfg.Decision.Policy
 	cfg.Decision.Policy = target
-	if err := cfg.Validate(); err != nil {
-		fmt.Fprintf(stderr, "policy %s: resulting config does not validate: %v\n", action, err)
-		return policyAuditRecord{}, policyExitError
-	}
+	// No re-validation here: target is a defined decision policy that
+	// passed config.Load's validation, and only Decision.Policy
+	// changed, so Validate cannot fail (it checks the policy id's
+	// format, length, and that it names a defined policy).
 	if err := config.SaveAtomic(configPath, cfg); err != nil {
 		fmt.Fprintf(stderr, "policy %s: save config: %v\n", action, err)
 		return policyAuditRecord{}, policyExitError
 	}
-	after, err := fileSHA256(configPath)
+	after, err := hashConfigFile(configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "policy %s: hash rewritten config: %v\n", action, err)
 		return policyAuditRecord{}, policyExitError

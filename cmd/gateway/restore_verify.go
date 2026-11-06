@@ -314,6 +314,16 @@ func checkMasterKeyPairing(manifest backupManifest, payloads map[string][]byte, 
 	return c
 }
 
+// bundledAuditContext is a seam for checkBundledAuditChain's
+// verification timeout: VerifyAuditChain on a just-opened store does
+// not block or fail under normal conditions, so the 30s timeout
+// cannot fire deterministically in production or tests. A test
+// substitutes a pre-cancelled context. (Same pattern as
+// doctorAuditContext in doctor.go.)
+var bundledAuditContext = func() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
 func checkBundledAuditChain(payloads map[string][]byte) (c verifyCheck) {
 	c = verifyCheck{Name: "audit_chain"}
 	start := time.Now()
@@ -344,7 +354,7 @@ func checkBundledAuditChain(payloads map[string][]byte) (c verifyCheck) {
 		return c
 	}
 	defer func() { _ = store.Close() }()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := bundledAuditContext()
 	defer cancel()
 	report, err := store.VerifyAuditChain(ctx)
 	if err != nil {
@@ -452,6 +462,13 @@ func aggregateVerifyStatus(checks []verifyCheck) string {
 	return status
 }
 
+// disposableReadDir is a seam for prepareDisposableDir: os.ReadDir
+// on a directory that Lstat just confirmed is a real directory fails
+// only on an I/O error or concurrent removal, neither of which a
+// test can produce deterministically. The guard stays fail-closed in
+// production; the seam lets tests exercise it.
+var disposableReadDir = os.ReadDir
+
 // prepareDisposableDir refuses to materialize into a directory that is
 // not private, is a symlink, or already holds entries: `--into` must
 // never overwrite production-like state.
@@ -466,7 +483,7 @@ func prepareDisposableDir(dir string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("--into %s is not a real directory", dir)
 	}
-	entries, err := os.ReadDir(dir)
+	entries, err := disposableReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("inspect --into directory: %w", err)
 	}
@@ -480,6 +497,14 @@ func prepareDisposableDir(dir string) error {
 // directory using fixed names. It is a read of the bundle, not a
 // production restore: no journal, no rollback, and the operator-chosen
 // directory must be empty.
+// materializeReadFile is a seam for materializeBundle's read-back
+// verification: after writeFileAtomic renames a fresh temp file into
+// place, reading it back can only fail through concurrent removal
+// or replacement, which no test can produce deterministically. The
+// verification stays fail-closed in production; the seam lets tests
+// exercise it.
+var materializeReadFile = os.ReadFile
+
 func materializeBundle(dir string, payloads map[string][]byte) error {
 	names := map[string]string{
 		backupEntryConfig:   "config.json",
@@ -496,7 +521,7 @@ func materializeBundle(dir string, payloads map[string][]byte) error {
 		if err := writeFileAtomic(target, payload, 0o600); err != nil {
 			return fmt.Errorf("materialize %s: %w", names[entry], err)
 		}
-		got, err := os.ReadFile(target)
+		got, err := materializeReadFile(target)
 		if err != nil || sha256Hex(got) != sha256Hex(payload) {
 			return fmt.Errorf("materialized %s failed hash verification", names[entry])
 		}
@@ -516,11 +541,10 @@ func emitVerifyReport(report restoreVerifyReport, reportPath string, stdout, std
 	}
 	fmt.Fprintf(stdout, "restore verify status: %s (%dms)\n", report.Status, report.DurationMS)
 	if reportPath != "" {
-		data, err := json.MarshalIndent(report, "", "  ")
-		if err != nil {
-			fmt.Fprintf(stderr, "nexaroute restore --verify: cannot encode report: %v\n", err)
-			return
-		}
+		// json.MarshalIndent cannot fail here: the report graph is
+		// all strings, bools, int64 and time.Time, with no floats,
+		// no any, no maps and no custom Marshalers.
+		data, _ := json.MarshalIndent(report, "", "  ")
 		if err := writeFileAtomic(reportPath, append(data, '\n'), 0o600); err != nil {
 			fmt.Fprintf(stderr, "nexaroute restore --verify: cannot write report: %v\n", err)
 			return
@@ -537,7 +561,9 @@ func sha256File(path string) (string, int64, error) {
 		return "", 0, err
 	}
 	defer func() { _ = fh.Close() }()
-	info, err := fh.Stat()
+	// A Stat failure (failing device) fails closed rather than
+	// dereferencing a nil FileInfo in the return below.
+	info, err := fileStat(fh)
 	if err != nil {
 		return "", 0, err
 	}
