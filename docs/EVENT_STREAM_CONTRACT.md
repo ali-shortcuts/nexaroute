@@ -96,7 +96,7 @@ Emitted when the gateway reloads runtime configuration from disk or environment.
 ```
 
 ### 3.4 `keepalive`
-Transport-level keepalive frame sent every 15 seconds to prevent intermediate proxy timeouts. Carry no business state.
+Transport-level keepalive frame sent every 20 seconds to prevent intermediate proxy timeouts. Carry no business state.
 
 ```json
 {
@@ -111,7 +111,7 @@ Transport-level keepalive frame sent every 15 seconds to prevent intermediate pr
 
 ## 4. Reconnection & Resynchronization Rules
 
-1. **Reconnection Header**: Clients pass `Last-Event-ID` or query parameter `last_seq` containing the last processed sequence number upon reconnect.
+1. **Reconnection Header**: Clients pass `Last-Event-ID` or query parameter `since` containing the last processed sequence number upon reconnect.
 2. **Epoch Check**: If the server's `epoch` differs from the client's cached `epoch`, the gateway process has restarted. The client MUST discard existing sequence numbers and fetch a new full snapshot (`GET /admin/api/snapshot`).
 3. **Gap Detection**: If `received_seq > last_seq + 1` within the same epoch, an event buffer overflow occurred. The client MUST trigger a full snapshot refresh.
 4. **Polling Fallback**: If SSE connection fails repeatedly (3+ retries), dashboard falls back to polling `GET /admin/api/snapshot` every 5 seconds. Snapshot polling deduplicates against SSE state using `(epoch, seq)`.
