@@ -383,7 +383,7 @@ func clientScopeForSession(r *http.Request) string {
 }
 
 func sessionKeyFromRequestParts(r *http.Request, bodyKey string) string {
-	for _, header := range []string{"x-claude-code-session-id", "x-litellm-session-id", "x-litellm-trace-id", "x-session-id"} {
+	for _, header := range []string{"x-claude-code-session-id", "x-litellm-session-id", "x-session-id"} {
 		if v := boundedSessionValue(r.Header.Get(header)); v != "" {
 			return v
 		}
