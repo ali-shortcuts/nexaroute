@@ -96,7 +96,7 @@ fi
 last=""
 for arg in "$@"; do last="$arg"; done
 if [ "$last" = "-" ]; then
-  printf '\\000\\377'
+  printf '\000\377'
   exit 0
 fi
 if [ -z "$last" ]; then
@@ -108,7 +108,7 @@ printf "fake-render-output" > "$last"
 	if err := os.WriteFile(ffmpeg, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(ffprobe, []byte("#!/bin/sh\\nexit 0\\n"), 0o700); err != nil {
+	if err := os.WriteFile(ffprobe, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(font, []byte("test-font"), 0o600); err != nil {
