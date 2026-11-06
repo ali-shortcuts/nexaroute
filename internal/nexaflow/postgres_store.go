@@ -65,6 +65,11 @@ const (
 	wfMigrateLock = int64(0x4e45584157464c57)
 )
 
+// pgxDriverName is the database/sql driver OpenPostgresStore opens.
+// It is a variable (not a constant) so tests can point it at a fake
+// driver registered under a unique name; production always uses "pgx".
+var pgxDriverName = "pgx"
+
 // PostgresStore implements Store over database/sql. The caller owns
 // driver registration and pooling; use OpenPostgresStore for the
 // standard pgx-backed construction.
@@ -75,7 +80,7 @@ type PostgresStore struct {
 // OpenPostgresStore opens a pgx connection pool, verifies it, and runs
 // the first-open migration.
 func OpenPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
-	db, err := sql.Open("pgx", dsn)
+	db, err := sql.Open(pgxDriverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("nexaflow: open postgres store: %w", err)
 	}
@@ -308,11 +313,8 @@ func (s *PostgresStore) publish(ctx context.Context, definitionID, publishedBy, 
 		if err := commitPostgres(tx); err != nil {
 			return PublishedDefinition{}, err
 		}
-		// Same guard as above, repeated at the conversion site:
-		// lastRev is provably non-negative here, so the narrowing
-		// below cannot wrap (the outer guard already returns on
-		// negative values; this keeps the invariant local to the
-		// conversion for readers and static analysis).
+		// Keep the invariant local to this conversion as a second
+		// fail-closed guard against corrupt negative revisions.
 		if lastRev < 0 {
 			return PublishedDefinition{}, fmt.Errorf("nexaflow: corrupt negative revision %d for definition %q", lastRev, definitionID)
 		}
@@ -727,10 +729,12 @@ func scanNode(row interface{ Scan(...any) error }) (NodeExecution, error) {
 		return NodeExecution{}, err
 	}
 	e.State = NodeState(state)
+	// Columns are authoritative: a NULL lease_until must clear the
+	// payload's embedded copy, not leave it standing. ReleaseLease
+	// clears the columns without rewriting the payload, so a
+	// conditional overlay would return a stale lease after release.
 	e.LeaseOwner = leaseOwner
-	if leaseUntil.Valid {
-		e.LeaseUntil = leaseUntil.Time
-	}
+	e.LeaseUntil = leaseUntil.Time
 	e.Input = deepCopyMap(e.Input)
 	e.Output = deepCopyMap(e.Output)
 	e.ResumeInput = deepCopyMap(e.ResumeInput)

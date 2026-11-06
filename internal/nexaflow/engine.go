@@ -12,6 +12,13 @@ import (
 	"github.com/ali-shortcuts/nexaroute/internal/authz"
 )
 
+// nexaflowRandRead is crypto/rand.Read, exposed as a package variable
+// so tests can inject a deterministic RNG failure: the OS RNG has no
+// deterministic failure trigger, and the generate-id error branches in
+// NewEngine, CreateRun and (studio_port) InstantiateTemplate are
+// otherwise unreachable. Production code never reassigns it.
+var nexaflowRandRead = rand.Read
+
 // Engine bounds (ADR 0008 §D16 + Phase 2 safety limits). These bound
 // what one definition or run may carry; the registry bounds node
 // config/input/output separately.
@@ -137,7 +144,7 @@ func NewEngine(opts EngineOptions) (*Engine, error) {
 	workerID := opts.WorkerID
 	if workerID == "" {
 		var b [8]byte
-		if _, err := rand.Read(b[:]); err != nil {
+		if _, err := nexaflowRandRead(b[:]); err != nil {
 			return nil, fmt.Errorf("nexaflow: generate worker id: %w", err)
 		}
 		workerID = "engine-" + hex.EncodeToString(b[:])
@@ -272,7 +279,7 @@ func (e *Engine) CreateRun(ctx context.Context, pub PublishedDefinition, princip
 		}
 	}
 	var idb [16]byte
-	if _, err := rand.Read(idb[:]); err != nil {
+	if _, err := nexaflowRandRead(idb[:]); err != nil {
 		return Run{}, fmt.Errorf("nexaflow: generate run id: %w", err)
 	}
 	run := Run{

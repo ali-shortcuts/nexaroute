@@ -177,6 +177,12 @@ func NewRegistry(specs []*NodeSpec) (*Registry, error) {
 // DefaultRegistry returns the registry of all adapter nodes.
 func DefaultRegistry() *Registry {
 	r, err := NewRegistry(allNodeSpecs())
+	// Unreachable in practice (and therefore uncovered):
+	// allNodeSpecs is a fixed literal list, and every
+	// DefaultRegistry call in the test suite proves it passes
+	// NewRegistry's validation, so err is always nil here. The
+	// panic stays as a fail-loud guard for future edits to the
+	// fixed list.
 	if err != nil {
 		panic(err)
 	}

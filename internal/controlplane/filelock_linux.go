@@ -16,6 +16,12 @@ import (
 // Short enough to keep handoff latency low, long enough to avoid syscall spam.
 const fileLockPollInterval = 5 * time.Millisecond
 
+// flockFunc is syscall.Flock by default. Tests replace it to inject a
+// non-contention flock failure (for example EBADF/EINVAL), which has no
+// deterministic filesystem trigger: every openable path yields either a
+// successful lock or EWOULDBLOCK. Callers must restore it.
+var flockFunc = syscall.Flock
+
 func acquireFileLock(ctx context.Context, lockPath, op string, timeout time.Duration) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -40,7 +46,7 @@ func acquireFileLock(ctx context.Context, lockPath, op string, timeout time.Dura
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+		if err := flockFunc(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
 			return func() {
 				_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 				_ = f.Close()

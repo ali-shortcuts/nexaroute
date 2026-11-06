@@ -154,13 +154,18 @@ func docToState(doc *fileStateDoc) *storeState {
 		s.runByIdem[k] = v
 	}
 	for k, list := range doc.Nodes {
-		cp := make([]*NodeExecution, len(list))
-		for i, e := range list {
+		// Compact, like the Runs/Approvals loops above: a nil hole
+		// left in place would panic the first reader (currentAttempt
+		// dereferences e.NodeID, getNodeExecutions dereferences *e),
+		// and a null entry can reach here from a hand-edited or
+		// corrupt state file.
+		cp := make([]*NodeExecution, 0, len(list))
+		for _, e := range list {
 			if e == nil {
 				continue
 			}
 			ec := cloneNodeExec(*e)
-			cp[i] = &ec
+			cp = append(cp, &ec)
 		}
 		s.nodes[k] = cp
 	}

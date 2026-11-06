@@ -20,6 +20,7 @@ type scriptedSQL struct {
 	queryErr    error
 	execErr     error
 	commitErr   error
+	beginErr    error
 	affected    int64
 	affectedErr error
 	queries     []string
@@ -66,9 +67,17 @@ func (d scriptedDriver) Open(string) (driver.Conn, error) { return scriptedConn(
 func (c scriptedConn) Prepare(string) (driver.Stmt, error) {
 	return nil, errors.New("prepare is not used")
 }
-func (c scriptedConn) Close() error              { return nil }
-func (c scriptedConn) Begin() (driver.Tx, error) { return scriptedTx(c), nil }
+func (c scriptedConn) Close() error { return nil }
+func (c scriptedConn) Begin() (driver.Tx, error) {
+	if c.state.beginErr != nil {
+		return nil, c.state.beginErr
+	}
+	return scriptedTx(c), nil
+}
 func (c scriptedConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	if c.state.beginErr != nil {
+		return nil, c.state.beginErr
+	}
 	return scriptedTx(c), nil
 }
 func (c scriptedConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {

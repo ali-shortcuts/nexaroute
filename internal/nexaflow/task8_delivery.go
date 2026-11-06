@@ -88,6 +88,11 @@ func (l *FileDeliveryLedger) Claim(_ context.Context, key string) (bool, error) 
 	if werr != nil {
 		return false, fmt.Errorf("nexaflow: claim delivery: %w", werr)
 	}
+	// Unreachable in practice (and therefore uncovered): Close on a
+	// freshly created regular file fails only on exotic filesystem
+	// errors (NFS, or EBADF on a double close), none of which this
+	// path can produce — there is no deterministic trigger. The
+	// check stays as a fail-closed guard.
 	if cerr != nil {
 		return false, fmt.Errorf("nexaflow: claim delivery: %w", cerr)
 	}

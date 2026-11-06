@@ -414,13 +414,14 @@ func (c *GatewayClient) VideoAsset(ctx context.Context, jobID, assetID string) (
 	if meta.ID == "" {
 		return VideoAssetInfo{}, nil, NewNodeError("asset_not_found", false, "asset is not listed on this video job")
 	}
-	if err := validateLoopbackBaseURL(c.BaseURL); err != nil {
-		return VideoAssetInfo{}, nil, NewNodeError("backend_error", false, "video asset request failed: %s", RedactError(err))
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/v1/video/jobs/"+url.PathEscape(jobID)+"/assets/"+url.PathEscape(assetID), nil)
-	if err != nil {
-		return VideoAssetInfo{}, nil, NewNodeError("backend_error", false, "video asset request failed")
-	}
+	// No second loopback check here: VideoStatus above already ran
+	// doJSON, which validates this same BaseURL with
+	// validateLoopbackBaseURL (a pure function) and fails closed on
+	// it, so re-validating the unchanged value cannot fail. Likewise
+	// NewRequestWithContext cannot fail here: the method is the
+	// constant GET, the URL passed that validation, and both path
+	// segments are url.PathEscape'd.
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(c.BaseURL, "/")+"/v1/video/jobs/"+url.PathEscape(jobID)+"/assets/"+url.PathEscape(assetID), nil)
 	if token, err := c.authToken(); err != nil {
 		return VideoAssetInfo{}, nil, NewNodeError("secret_error", false, "auth token resolution failed")
 	} else if token != "" {

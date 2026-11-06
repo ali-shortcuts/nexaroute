@@ -42,6 +42,20 @@ type fakePGDB struct {
 	failCommit bool
 	failQuery  string // QueryContext fails when the query contains this
 	failExec   string // ExecContext fails when the query contains this
+	// failMetaKey makes the meta upsert fail when its key argument
+	// equals this value, so one metadata write (head, anchor, or
+	// allocator) can fail while the others succeed.
+	failMetaKey string
+	// badAuditSeq / badMetaKey emit a wrong-typed value for the
+	// scanned column so rows.Scan fails; auditRowsErr / metaRowsErr
+	// make the second Next return an error so rows.Err() is non-nil;
+	// auditRecordExtraCol adds a second column so AuditRecords'
+	// one-destination Scan fails on the column count.
+	badAuditSeq         bool
+	auditRowsErr        bool
+	badMetaKey          bool
+	metaRowsErr         bool
+	auditRecordExtraCol bool
 }
 
 func newFakePGDB() *fakePGDB {
@@ -247,11 +261,19 @@ type fakePGRows struct {
 	cols []string
 	rows [][]driver.Value
 	pos  int
+	// failAfter/failErr make Next return failErr once pos reaches
+	// failAfter (failErr == nil disables it), so database/sql
+	// surfaces the error through rows.Err().
+	failAfter int
+	failErr   error
 }
 
 func (r *fakePGRows) Columns() []string { return r.cols }
 func (r *fakePGRows) Close() error      { return nil }
 func (r *fakePGRows) Next(dest []driver.Value) error {
+	if r.failErr != nil && r.pos == r.failAfter {
+		return r.failErr
+	}
 	if r.pos >= len(r.rows) {
 		return io.EOF
 	}
@@ -306,7 +328,15 @@ func (c *fakePGConn) query(_ context.Context, query string, args []driver.NamedV
 		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
 		rows := &fakePGRows{cols: []string{"seq", "record"}}
 		for _, seq := range seqs {
-			rows.rows = append(rows.rows, []driver.Value{seq, append([]byte(nil), db.audit[seq]...)})
+			var seqVal driver.Value = seq
+			if db.badAuditSeq {
+				seqVal = "bad"
+			}
+			rows.rows = append(rows.rows, []driver.Value{seqVal, append([]byte(nil), db.audit[seq]...)})
+		}
+		if db.auditRowsErr {
+			rows.failAfter = 1
+			rows.failErr = errors.New("fake-pg: injected rows error")
 		}
 		return rows, nil
 	case strings.Contains(query, `SELECT key, value FROM `+securityMetaTable):
@@ -317,7 +347,15 @@ func (c *fakePGConn) query(_ context.Context, query string, args []driver.NamedV
 		sort.Strings(keys)
 		rows := &fakePGRows{cols: []string{"key", "value"}}
 		for _, k := range keys {
-			rows.rows = append(rows.rows, []driver.Value{k, append([]byte(nil), db.meta[k]...)})
+			var keyVal driver.Value = k
+			if db.badMetaKey {
+				keyVal = nil
+			}
+			rows.rows = append(rows.rows, []driver.Value{keyVal, append([]byte(nil), db.meta[k]...)})
+		}
+		if db.metaRowsErr {
+			rows.failAfter = 1
+			rows.failErr = errors.New("fake-pg: injected rows error")
 		}
 		return rows, nil
 	case strings.Contains(query, "SELECT EXISTS"):
@@ -342,6 +380,15 @@ func (c *fakePGConn) query(_ context.Context, query string, args []driver.NamedV
 				break
 			}
 			rows.rows = append(rows.rows, []driver.Value{append([]byte(nil), db.audit[seq]...)})
+		}
+		if db.auditRecordExtraCol {
+			// database/sql rejects Scan when the column count
+			// differs from the destination count; the adapter scans
+			// one []byte per row, so a second column fails it.
+			rows.cols = []string{"record", "extra"}
+			for i := range rows.rows {
+				rows.rows[i] = append(rows.rows[i], int64(0))
+			}
 		}
 		return rows, nil
 	default:
@@ -381,6 +428,9 @@ func (c *fakePGConn) exec(_ context.Context, query string, args []driver.NamedVa
 		db.audit[argInt64(v[0])] = argBytes(v[1])
 		return fakePGResult{n: 1}, nil
 	case strings.Contains(query, `INSERT INTO `+securityMetaTable):
+		if db.failMetaKey != "" && argString(v[0]) == db.failMetaKey {
+			return nil, errors.New("fake-pg: injected meta exec failure")
+		}
 		db.meta[argString(v[0])] = argBytes(v[1])
 		return fakePGResult{n: 1}, nil
 	case strings.Contains(query, `DELETE FROM `+securitySessionsTable):
