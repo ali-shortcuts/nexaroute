@@ -163,6 +163,9 @@ func percentileCopy(values []float64, p float64) float64 {
 	}
 	cp := append([]float64(nil), values...)
 	sort.Float64s(cp)
+	if math.IsNaN(p) {
+		return cp[len(cp)-1]
+	}
 	if p <= 0 {
 		return cp[0]
 	}
