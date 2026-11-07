@@ -1,76 +1,78 @@
-name: v0.25.0 OpenAI + Anthropic live acceptance
+name: v0.25.0 OxionAI OpenAI-family + Claude-family live acceptance
 
-# One manual run executes both owner-selected providers on the exact main SHA.
-# Credentials are supplied only through the protected conformance-live
-# environment. The single artifact is the evidence bundle referenced by the
-# v0.25.0 structured acceptance record for issue #646.
+# One manual run tests two operator-selected model IDs through OxionAI's
+# documented OpenAI-compatible Chat Completions endpoint. It does not claim
+# direct OpenAI or direct Anthropic interoperability.
 on:
   workflow_dispatch:
     inputs:
-      openai_model:
-        description: "Exact enabled OpenAI model ID from the operator account"
+      openai_family_model:
+        description: "Exact enabled OpenAI-family model ID from OxionAI /v1/models"
         required: true
         type: string
-      anthropic_model:
-        description: "Exact enabled Anthropic model ID from the operator account"
+      claude_family_model:
+        description: "Exact enabled Claude-family model ID from OxionAI /v1/models"
         required: true
         type: string
-      openai_input_cost_per_mtok:
-        description: "OpenAI input price in USD per 1M tokens for this exact model"
+      openai_family_input_cost_per_mtok:
+        description: "OxionAI input price in USD per 1M tokens for this exact model"
         required: true
         type: string
-      openai_output_cost_per_mtok:
-        description: "OpenAI output price in USD per 1M tokens for this exact model"
+      openai_family_output_cost_per_mtok:
+        description: "OxionAI output price in USD per 1M tokens for this exact model"
         required: true
         type: string
-      anthropic_input_cost_per_mtok:
-        description: "Anthropic input price in USD per 1M tokens for this exact model"
+      claude_family_input_cost_per_mtok:
+        description: "OxionAI input price in USD per 1M tokens for this exact model"
         required: true
         type: string
-      anthropic_output_cost_per_mtok:
-        description: "Anthropic output price in USD per 1M tokens for this exact model"
+      claude_family_output_cost_per_mtok:
+        description: "OxionAI output price in USD per 1M tokens for this exact model"
         required: true
         type: string
-      max_cost_usd_per_provider:
-        description: "Hard estimated/observed cost ceiling for EACH provider run (USD)"
+      max_cost_usd_total:
+        description: "Operator-approved total estimate/observed-cost ceiling across both model runs (USD)"
         required: true
-        default: "1.00"
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: v0250-provider-acceptance
+  group: v0250-oxionai-acceptance
   cancel-in-progress: false
 
 jobs:
   provider-acceptance:
-    name: OpenAI + Anthropic live canaries
+    name: OxionAI live canaries (OpenAI-family + Claude-family)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: conformance-live
     steps:
-      - name: Checkout exact main candidate
+      - name: Checkout exact selected candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
 
-      - name: Verify this is the current main tip
+      - name: Verify this is the current candidate branch tip
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Run this acceptance only from the main branch."
+          if [[ "$GITHUB_REPOSITORY" != "ali-shortcuts/nexaroute" ]]; then
+            echo "::error::Run this acceptance only in ali-shortcuts/nexaroute."
             exit 1
           fi
-          git fetch --no-tags origin main --depth=1
-          main_sha="$(git rev-parse FETCH_HEAD)"
-          if [[ "$main_sha" != "$GITHUB_SHA" ]]; then
-            echo "::error::The dispatch SHA is not the current main tip; refresh main and dispatch again."
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/heads/feat/issue-646-oxionai-acceptance) ;;
+            *) echo "::error::Dispatch only from main or the approved issue #646 candidate branch."; exit 1 ;;
+          esac
+          git fetch --no-tags origin "$GITHUB_REF" --depth=1
+          candidate_sha="$(git rev-parse FETCH_HEAD)"
+          if [[ "$candidate_sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::The dispatch SHA is not the selected branch tip; refresh the branch and dispatch again."
             exit 1
           fi
-          echo "Acceptance candidate SHA: $GITHUB_SHA"
+          echo "OxionAI acceptance candidate SHA: $GITHUB_SHA"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -78,27 +80,25 @@ jobs:
           go-version: "1.27.x"
           cache: false
 
-      - name: Validate operator inputs and protected credentials
+      - name: Validate operator inputs and protected credential
         env:
-          OPENAI_API_KEY: ${{ secrets.NEXAROUTE_OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.NEXAROUTE_ANTHROPIC_API_KEY }}
-          OPENAI_MODEL: ${{ inputs.openai_model }}
-          ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
-          OPENAI_INPUT_PRICE: ${{ inputs.openai_input_cost_per_mtok }}
-          OPENAI_OUTPUT_PRICE: ${{ inputs.openai_output_cost_per_mtok }}
-          ANTHROPIC_INPUT_PRICE: ${{ inputs.anthropic_input_cost_per_mtok }}
-          ANTHROPIC_OUTPUT_PRICE: ${{ inputs.anthropic_output_cost_per_mtok }}
-          MAX_COST_USD: ${{ inputs.max_cost_usd_per_provider }}
+          OXIONAI_API_KEY: ${{ secrets.NEXAROUTE_OXIONAI_API_KEY }}
+          OPENAI_FAMILY_MODEL: ${{ inputs.openai_family_model }}
+          CLAUDE_FAMILY_MODEL: ${{ inputs.claude_family_model }}
+          OPENAI_FAMILY_INPUT_PRICE: ${{ inputs.openai_family_input_cost_per_mtok }}
+          OPENAI_FAMILY_OUTPUT_PRICE: ${{ inputs.openai_family_output_cost_per_mtok }}
+          CLAUDE_FAMILY_INPUT_PRICE: ${{ inputs.claude_family_input_cost_per_mtok }}
+          CLAUDE_FAMILY_OUTPUT_PRICE: ${{ inputs.claude_family_output_cost_per_mtok }}
+          MAX_COST_TOTAL: ${{ inputs.max_cost_usd_total }}
         shell: bash
         run: |
           set -euo pipefail
-          # Check presence only. Never print credential values.
-          [[ -n "$OPENAI_API_KEY" ]] || { echo "::error::NEXAROUTE_OPENAI_API_KEY is missing from conformance-live."; exit 1; }
-          [[ -n "$ANTHROPIC_API_KEY" ]] || { echo "::error::NEXAROUTE_ANTHROPIC_API_KEY is missing from conformance-live."; exit 1; }
-          [[ -n "$OPENAI_MODEL" && -n "$ANTHROPIC_MODEL" ]] || { echo "::error::Both exact model IDs are required."; exit 1; }
-          for value in "$OPENAI_INPUT_PRICE" "$OPENAI_OUTPUT_PRICE" "$ANTHROPIC_INPUT_PRICE" "$ANTHROPIC_OUTPUT_PRICE" "$MAX_COST_USD"; do
+          # Check presence only. Never print or persist the credential value.
+          [[ -n "$OXIONAI_API_KEY" ]] || { echo "::error::NEXAROUTE_OXIONAI_API_KEY is missing from conformance-live."; exit 1; }
+          [[ -n "$OPENAI_FAMILY_MODEL" && -n "$CLAUDE_FAMILY_MODEL" ]] || { echo "::error::Both exact model IDs are required."; exit 1; }
+          for value in "$OPENAI_FAMILY_INPUT_PRICE" "$OPENAI_FAMILY_OUTPUT_PRICE" "$CLAUDE_FAMILY_INPUT_PRICE" "$CLAUDE_FAMILY_OUTPUT_PRICE" "$MAX_COST_TOTAL"; do
             if ! [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v n="$value" 'BEGIN { exit !(n > 0) }'; then
-              echo "::error::Model prices and per-provider cost ceiling must be positive decimal USD values."
+              echo "::error::Model prices and total cost ceiling must be positive decimal USD values."
               exit 1
             fi
           done
@@ -110,65 +110,69 @@ jobs:
           mkdir -p bin
           go build -trimpath -o ./bin/nexaroute ./cmd/gateway
 
-      - name: Run both bounded live canaries
+      - name: Run both bounded OxionAI canaries
         id: canaries
         env:
-          OPENAI_API_KEY: ${{ secrets.NEXAROUTE_OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.NEXAROUTE_ANTHROPIC_API_KEY }}
-          OPENAI_MODEL: ${{ inputs.openai_model }}
-          ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
-          OPENAI_INPUT_PRICE: ${{ inputs.openai_input_cost_per_mtok }}
-          OPENAI_OUTPUT_PRICE: ${{ inputs.openai_output_cost_per_mtok }}
-          ANTHROPIC_INPUT_PRICE: ${{ inputs.anthropic_input_cost_per_mtok }}
-          ANTHROPIC_OUTPUT_PRICE: ${{ inputs.anthropic_output_cost_per_mtok }}
-          MAX_COST_USD: ${{ inputs.max_cost_usd_per_provider }}
+          OXIONAI_API_KEY: ${{ secrets.NEXAROUTE_OXIONAI_API_KEY }}
+          OPENAI_FAMILY_MODEL: ${{ inputs.openai_family_model }}
+          CLAUDE_FAMILY_MODEL: ${{ inputs.claude_family_model }}
+          OPENAI_FAMILY_INPUT_PRICE: ${{ inputs.openai_family_input_cost_per_mtok }}
+          OPENAI_FAMILY_OUTPUT_PRICE: ${{ inputs.openai_family_output_cost_per_mtok }}
+          CLAUDE_FAMILY_INPUT_PRICE: ${{ inputs.claude_family_input_cost_per_mtok }}
+          CLAUDE_FAMILY_OUTPUT_PRICE: ${{ inputs.claude_family_output_cost_per_mtok }}
+          MAX_COST_TOTAL: ${{ inputs.max_cost_usd_total }}
         shell: bash
         run: |
           set -uo pipefail
           out=".artifacts/provider-v025"
-          # Seven scenarios, at most seven upstream calls, 4,096 input-token
-          # estimation ceiling and 512 output-token ceiling per provider.
-          # The same generic credential variable is mapped to one distinct
-          # protected secret per process; neither value enters argv or a file.
-          NEXAROUTE_CANARY_API_KEY="$OPENAI_API_KEY" ./bin/nexaroute conformance canary \
-            --acknowledge-cost --preset openai --model "$OPENAI_MODEL" \
+          max_cost_per_model="$(python3 -c 'from decimal import Decimal; import os; print(Decimal(os.environ["MAX_COST_TOTAL"]) / 2)')"
+          # Each model is capped at half of the operator-approved total. Thus
+          # the two sequential runs cannot each consume the full total ceiling.
+          # Seven acceptance scenarios, at most seven calls, 4,096 estimated
+          # input tokens and 512 output tokens per model. The one secret stays
+          # in the environment and is never passed as a CLI argument or written.
+          NEXAROUTE_CANARY_API_KEY="$OXIONAI_API_KEY" ./bin/nexaroute conformance canary \
+            --acknowledge-cost --preset openai --model "$OPENAI_FAMILY_MODEL" \
+            --base-url https://oxionai.com/v1 --auth-mode bearer \
             --scenarios acceptance --max-calls 7 --max-input-tokens 4096 \
             --max-output-tokens 512 --call-timeout 30s --overall-timeout 3m \
-            --input-cost-per-mtok "$OPENAI_INPUT_PRICE" \
-            --output-cost-per-mtok "$OPENAI_OUTPUT_PRICE" \
-            --max-cost-usd "$MAX_COST_USD" \
-            --out "$out/openai.json" >/dev/null 2>"$RUNNER_TEMP/openai-canary.stderr"
-          openai_exit=$?
+            --input-cost-per-mtok "$OPENAI_FAMILY_INPUT_PRICE" \
+            --output-cost-per-mtok "$OPENAI_FAMILY_OUTPUT_PRICE" \
+            --max-cost-usd "$max_cost_per_model" \
+            --out "$out/openai-family.json" >/dev/null 2>"$RUNNER_TEMP/openai-family-canary.stderr"
+          openai_family_exit=$?
 
-          NEXAROUTE_CANARY_API_KEY="$ANTHROPIC_API_KEY" ./bin/nexaroute conformance canary \
-            --acknowledge-cost --preset anthropic --model "$ANTHROPIC_MODEL" \
+          NEXAROUTE_CANARY_API_KEY="$OXIONAI_API_KEY" ./bin/nexaroute conformance canary \
+            --acknowledge-cost --preset openai --model "$CLAUDE_FAMILY_MODEL" \
+            --base-url https://oxionai.com/v1 --auth-mode bearer \
             --scenarios acceptance --max-calls 7 --max-input-tokens 4096 \
             --max-output-tokens 512 --call-timeout 30s --overall-timeout 3m \
-            --input-cost-per-mtok "$ANTHROPIC_INPUT_PRICE" \
-            --output-cost-per-mtok "$ANTHROPIC_OUTPUT_PRICE" \
-            --max-cost-usd "$MAX_COST_USD" \
-            --out "$out/anthropic.json" >/dev/null 2>"$RUNNER_TEMP/anthropic-canary.stderr"
-          anthropic_exit=$?
+            --input-cost-per-mtok "$CLAUDE_FAMILY_INPUT_PRICE" \
+            --output-cost-per-mtok "$CLAUDE_FAMILY_OUTPUT_PRICE" \
+            --max-cost-usd "$max_cost_per_model" \
+            --out "$out/claude-family.json" >/dev/null 2>"$RUNNER_TEMP/claude-family-canary.stderr"
+          claude_family_exit=$?
 
-          echo "openai_exit=$openai_exit" >> "$GITHUB_OUTPUT"
-          echo "anthropic_exit=$anthropic_exit" >> "$GITHUB_OUTPUT"
-          # Validation below determines the job verdict and still runs when
-          # one canary exits non-zero, preserving both reports for diagnosis.
+          echo "openai_family_exit=$openai_family_exit" >> "$GITHUB_OUTPUT"
+          echo "claude_family_exit=$claude_family_exit" >> "$GITHUB_OUTPUT"
+          # Report validation determines the job verdict and preserves both
+          # reports for diagnosis if one canary exits non-zero.
           exit 0
 
       - name: Validate both live reports and create the evidence summary
         if: always()
         env:
-          OPENAI_MODEL: ${{ inputs.openai_model }}
-          ANTHROPIC_MODEL: ${{ inputs.anthropic_model }}
-          MAX_COST_USD: ${{ inputs.max_cost_usd_per_provider }}
-          OPENAI_EXIT: ${{ steps.canaries.outputs.openai_exit }}
-          ANTHROPIC_EXIT: ${{ steps.canaries.outputs.anthropic_exit }}
+          OPENAI_FAMILY_MODEL: ${{ inputs.openai_family_model }}
+          CLAUDE_FAMILY_MODEL: ${{ inputs.claude_family_model }}
+          MAX_COST_TOTAL: ${{ inputs.max_cost_usd_total }}
+          OPENAI_FAMILY_EXIT: ${{ steps.canaries.outputs.openai_family_exit }}
+          CLAUDE_FAMILY_EXIT: ${{ steps.canaries.outputs.claude_family_exit }}
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json
+          import math
           import os
           import subprocess
           import sys
@@ -178,31 +182,29 @@ jobs:
           root = Path(".artifacts/provider-v025")
           root.mkdir(parents=True, exist_ok=True)
           expected = {
-              "openai": {
-                  "dialect": "openai_compatible",
-                  "host": "api.openai.com",
-                  "model": os.environ["OPENAI_MODEL"],
-              },
-              "anthropic": {
-                  "dialect": "anthropic_compatible",
-                  "host": "api.anthropic.com",
-                  "model": os.environ["ANTHROPIC_MODEL"],
-              },
+              "openai-family": {"model": os.environ.get("OPENAI_FAMILY_MODEL", "")},
+              "claude-family": {"model": os.environ.get("CLAUDE_FAMILY_MODEL", "")},
           }
           scenario_ids = {
               "text", "stream", "stream_usage", "tools",
               "tool_result", "auth_failure", "error_envelope",
           }
-          max_cost = float(os.environ["MAX_COST_USD"])
+          try:
+              max_total = float(os.environ["MAX_COST_TOTAL"])
+          except (KeyError, ValueError):
+              max_total = 0.0
+          max_per_model = max_total / 2 if max_total > 0 else 0.0
           errors = []
-          providers = []
+          model_records = []
+          total_estimated = 0.0
+          observed_values = []
 
           for name, want in expected.items():
               path = root / f"{name}.json"
-              record = {"provider": name, "report": str(path), "result": "FAIL"}
+              record = {"model_role": name, "report": str(path), "result": "FAIL"}
               if not path.is_file():
-                  errors.append(f"{name}: report missing (canary exit={os.environ.get(name.upper() + '_EXIT', 'NOT_RUN')})")
-                  providers.append(record)
+                  errors.append(f"{name}: report missing (canary exit={os.environ.get(name.upper().replace('-', '_') + '_EXIT', 'NOT_RUN')})")
+                  model_records.append(record)
                   continue
 
               check = subprocess.run(
@@ -212,14 +214,14 @@ jobs:
               )
               if check.returncode != 0:
                   errors.append(f"{name}: report validator failed: {(check.stdout + check.stderr).strip()[:1200]}")
-                  providers.append(record)
+                  model_records.append(record)
                   continue
 
               try:
                   report = json.loads(path.read_text(encoding="utf-8"))
               except (OSError, ValueError) as exc:
                   errors.append(f"{name}: invalid JSON report: {exc}")
-                  providers.append(record)
+                  model_records.append(record)
                   continue
 
               provider = report.get("provider") or {}
@@ -227,65 +229,84 @@ jobs:
               scenarios = report.get("scenarios") or []
               actual_ids = [item.get("id") for item in scenarios if isinstance(item, dict)]
               statuses = {item.get("id"): item.get("status") for item in scenarios if isinstance(item, dict)}
-              host = urlsplit(provider.get("base_url", "")).hostname
+              base_url = provider.get("base_url", "")
+              host = urlsplit(base_url).hostname
               estimated = limits.get("estimated_cost_usd")
               observed = limits.get("observed_cost_usd")
+              calls_used = limits.get("calls_used", 999)
+              estimate_ok = isinstance(estimated, (int, float)) and math.isfinite(estimated) and 0 <= estimated <= max_per_model
+              observed_ok = observed is None or (isinstance(observed, (int, float)) and math.isfinite(observed) and 0 <= observed <= max_per_model)
 
               checks = [
                   (report.get("schema") == "conformance.live-canary.v1", "wrong report schema"),
                   (report.get("outcome") == "PASS", f"overall outcome is {report.get('outcome')}"),
-                  (provider.get("dialect") == want["dialect"], f"wrong dialect: {provider.get('dialect')}"),
-                  (host == want["host"], f"wrong live provider host: {host}"),
+                  (provider.get("dialect") == "openai_compatible", f"wrong dialect: {provider.get('dialect')}"),
+                  (host == "oxionai.com" and base_url == "https://oxionai.com/v1", f"wrong OxionAI base URL: {base_url}"),
                   (provider.get("model") == want["model"], "report model does not match dispatch input"),
                   (set(actual_ids) == scenario_ids and len(actual_ids) == len(scenario_ids), "selected scenario set is incomplete or contains duplicates"),
                   (all(statuses.get(sid) == "PASS" for sid in scenario_ids), "one or more acceptance scenarios did not PASS"),
-                  (limits.get("max_calls") == 7 and limits.get("calls_used", 999) <= 7, "call ceiling or calls-used mismatch"),
+                  (limits.get("max_calls") == 7 and isinstance(calls_used, int) and calls_used <= 7, "call ceiling or calls-used mismatch"),
                   (limits.get("max_input_tokens") == 4096, "input-token estimate bound mismatch"),
                   (limits.get("max_output_tokens") == 512, "output-token ceiling mismatch"),
-                  (limits.get("cost_estimate_known") is True, "model pricing was not applied; cost estimate is unknown"),
-                  (isinstance(estimated, (int, float)) and estimated <= max_cost, "preflight estimate exceeds the per-provider cost ceiling or is missing"),
-                  (observed is None or (isinstance(observed, (int, float)) and observed <= max_cost), "observed cost exceeds the per-provider ceiling"),
+                  (limits.get("cost_estimate_known") is True and estimate_ok, "preflight estimate is unknown or exceeds half of the approved total ceiling"),
+                  (observed_ok, "observed cost exceeds half of the approved total ceiling"),
               ]
               bad = [message for ok, message in checks if not ok]
               if bad:
                   errors.extend(f"{name}: {message}" for message in bad)
-                  providers.append(record)
+                  model_records.append(record)
                   continue
 
               record["result"] = "PASS"
               record["dialect"] = provider["dialect"]
+              record["base_url"] = base_url
               record["model"] = provider["model"]
               record["generated_at"] = report.get("generated_at")
               record["scenarios"] = {sid: statuses[sid] for sid in sorted(scenario_ids)}
-              record["calls_used"] = limits.get("calls_used")
+              record["calls_used"] = calls_used
               record["estimated_cost_usd"] = estimated
               record["observed_cost_usd"] = observed
-              providers.append(record)
+              total_estimated += estimated
+              if observed is not None:
+                  observed_values.append(observed)
+              model_records.append(record)
+
+          if total_estimated > max_total + 1e-12:
+              errors.append("combined preflight estimates exceed the operator-approved total cost ceiling")
+          total_observed = sum(observed_values) if len(observed_values) == len(expected) else None
+          if total_observed is not None and total_observed > max_total + 1e-12:
+              errors.append("combined observed usage exceeds the operator-approved total cost ceiling")
 
           summary = {
-              "schema": "nexaroute.v0250-provider-acceptance.v1",
+              "schema": "nexaroute.v0250-oxionai-acceptance.v1",
               "release": "v0.25.0",
               "commit": os.environ.get("GITHUB_SHA", ""),
               "run_id": int(os.environ.get("GITHUB_RUN_ID", "0")),
               "event": os.environ.get("GITHUB_EVENT_NAME", ""),
               "result": "PASS" if not errors else "FAIL",
-              "provider_scope": ["openai", "anthropic"],
-              "providers": providers,
+              "provider": "oxionai",
+              "base_url": "https://oxionai.com/v1",
+              "protocol": "openai_compatible",
+              "model_scope": ["openai-family", "claude-family"],
+              "max_cost_usd_total": max_total,
+              "estimated_cost_usd_total": total_estimated,
+              "observed_cost_usd_total": total_observed,
+              "models": model_records,
               "errors": errors,
           }
           (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
           if errors:
               for error in errors:
-                  print(f"::error title=v0.25.0 provider acceptance::{error}")
+                  print(f"::error title=v0.25.0 OxionAI acceptance::{error}")
               sys.exit(1)
-          print("Both OpenAI and Anthropic live canaries PASS; seven scenarios each; cost estimates known and within the approved per-provider ceiling.")
+          print("Both OxionAI model-family canaries PASS; seven scenarios each; OpenAI-compatible live endpoint and combined cost ceiling verified.")
           PY
 
-      - name: Upload combined provider acceptance evidence
+      - name: Upload combined OxionAI acceptance evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: v0250-openai-anthropic-acceptance-${{ github.sha }}-${{ github.run_id }}
+          name: v0250-oxionai-acceptance-${{ github.sha }}-${{ github.run_id }}
           path: .artifacts/provider-v025/
           if-no-files-found: error
           retention-days: 90
