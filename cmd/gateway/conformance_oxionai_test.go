@@ -11,9 +11,9 @@ import (
 	"testing"
 )
 
-func TestConformanceCanaryOxionAIStyleOpenAICompatibleClaudeModel(t *testing.T) {
+func TestConformanceCanaryFreeModelStyleOpenAICompatibleClaudeModel(t *testing.T) {
 	var hits atomic.Int64
-	const testKey = "fixture-oxionai-key-not-a-real-credential"
+	const testKey = "fixture-freemodel-key-not-a-real-credential"
 	const modelID = "claude-family-fixture-model"
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +45,7 @@ func TestConformanceCanaryOxionAIStyleOpenAICompatibleClaudeModel(t *testing.T) 
 	defer server.Close()
 
 	t.Setenv("NEXAROUTE_CANARY_API_KEY", testKey)
-	out := filepath.Join(t.TempDir(), "oxionai-style-canary.json")
+	out := filepath.Join(t.TempDir(), "freemodel-style-canary.json")
 	var stdout, stderr strings.Builder
 	code := runConformance([]string{
 		"canary", "--acknowledge-cost", "--preset", "openai", "--model", modelID,

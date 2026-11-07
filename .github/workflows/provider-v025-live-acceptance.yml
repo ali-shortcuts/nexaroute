@@ -1,33 +1,33 @@
-name: v0.25.0 OxionAI OpenAI-family + Claude-family live acceptance
+name: v0.25.0 FreeModel OpenAI-family + Claude-family live acceptance
 
-# One manual run tests two operator-selected model IDs through OxionAI's
+# One manual run tests two operator-selected model IDs through FreeModel's
 # documented OpenAI-compatible Chat Completions endpoint. It does not claim
 # direct OpenAI or direct Anthropic interoperability.
 on:
   workflow_dispatch:
     inputs:
       openai_family_model:
-        description: "Exact enabled OpenAI-family model ID from OxionAI /v1/models"
+        description: "Exact enabled OpenAI-family model ID from FreeModel /v1/models"
         required: true
         type: string
       claude_family_model:
-        description: "Exact enabled Claude-family model ID from OxionAI /v1/models"
+        description: "Exact enabled Claude-family model ID from FreeModel /v1/models"
         required: true
         type: string
       openai_family_input_cost_per_mtok:
-        description: "OxionAI input price in USD per 1M tokens for this exact model"
+        description: "FreeModel input price in USD per 1M tokens for this exact model"
         required: true
         type: string
       openai_family_output_cost_per_mtok:
-        description: "OxionAI output price in USD per 1M tokens for this exact model"
+        description: "FreeModel output price in USD per 1M tokens for this exact model"
         required: true
         type: string
       claude_family_input_cost_per_mtok:
-        description: "OxionAI input price in USD per 1M tokens for this exact model"
+        description: "FreeModel input price in USD per 1M tokens for this exact model"
         required: true
         type: string
       claude_family_output_cost_per_mtok:
-        description: "OxionAI output price in USD per 1M tokens for this exact model"
+        description: "FreeModel output price in USD per 1M tokens for this exact model"
         required: true
         type: string
       max_cost_usd_total:
@@ -39,12 +39,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: v0250-oxionai-acceptance
+  group: v0250-freemodel-acceptance
   cancel-in-progress: false
 
 jobs:
   provider-acceptance:
-    name: OxionAI live canaries (OpenAI-family + Claude-family)
+    name: FreeModel live canaries (OpenAI-family + Claude-family)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: conformance-live
@@ -63,7 +63,7 @@ jobs:
             exit 1
           fi
           case "$GITHUB_REF" in
-            refs/heads/main|refs/heads/feat/issue-646-oxionai-acceptance) ;;
+            refs/heads/main|refs/heads/feat/issue-646-freemodel-acceptance) ;;
             *) echo "::error::Dispatch only from main or the approved issue #646 candidate branch."; exit 1 ;;
           esac
           git fetch --no-tags origin "$GITHUB_REF" --depth=1
@@ -72,7 +72,7 @@ jobs:
             echo "::error::The dispatch SHA is not the selected branch tip; refresh the branch and dispatch again."
             exit 1
           fi
-          echo "OxionAI acceptance candidate SHA: $GITHUB_SHA"
+          echo "FreeModel acceptance candidate SHA: $GITHUB_SHA"
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -82,7 +82,7 @@ jobs:
 
       - name: Validate operator inputs and protected credential
         env:
-          OXIONAI_API_KEY: ${{ secrets.NEXAROUTE_OXIONAI_API_KEY }}
+          FREEMODEL_API_KEY: ${{ secrets.NEXAROUTE_FREEMODEL_API_KEY }}
           OPENAI_FAMILY_MODEL: ${{ inputs.openai_family_model }}
           CLAUDE_FAMILY_MODEL: ${{ inputs.claude_family_model }}
           OPENAI_FAMILY_INPUT_PRICE: ${{ inputs.openai_family_input_cost_per_mtok }}
@@ -94,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           # Check presence only. Never print or persist the credential value.
-          [[ -n "$OXIONAI_API_KEY" ]] || { echo "::error::NEXAROUTE_OXIONAI_API_KEY is missing from conformance-live."; exit 1; }
+          [[ -n "$FREEMODEL_API_KEY" ]] || { echo "::error::NEXAROUTE_FREEMODEL_API_KEY is missing from conformance-live."; exit 1; }
           [[ -n "$OPENAI_FAMILY_MODEL" && -n "$CLAUDE_FAMILY_MODEL" ]] || { echo "::error::Both exact model IDs are required."; exit 1; }
           for value in "$OPENAI_FAMILY_INPUT_PRICE" "$OPENAI_FAMILY_OUTPUT_PRICE" "$CLAUDE_FAMILY_INPUT_PRICE" "$CLAUDE_FAMILY_OUTPUT_PRICE" "$MAX_COST_TOTAL"; do
             if ! [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v n="$value" 'BEGIN { exit !(n > 0) }'; then
@@ -110,10 +110,10 @@ jobs:
           mkdir -p bin
           go build -trimpath -o ./bin/nexaroute ./cmd/gateway
 
-      - name: Run both bounded OxionAI canaries
+      - name: Run both bounded FreeModel canaries
         id: canaries
         env:
-          OXIONAI_API_KEY: ${{ secrets.NEXAROUTE_OXIONAI_API_KEY }}
+          FREEMODEL_API_KEY: ${{ secrets.NEXAROUTE_FREEMODEL_API_KEY }}
           OPENAI_FAMILY_MODEL: ${{ inputs.openai_family_model }}
           CLAUDE_FAMILY_MODEL: ${{ inputs.claude_family_model }}
           OPENAI_FAMILY_INPUT_PRICE: ${{ inputs.openai_family_input_cost_per_mtok }}
@@ -131,9 +131,9 @@ jobs:
           # Seven acceptance scenarios, at most seven calls, 4,096 estimated
           # input tokens and 512 output tokens per model. The one secret stays
           # in the environment and is never passed as a CLI argument or written.
-          NEXAROUTE_CANARY_API_KEY="$OXIONAI_API_KEY" ./bin/nexaroute conformance canary \
+          NEXAROUTE_CANARY_API_KEY="$FREEMODEL_API_KEY" ./bin/nexaroute conformance canary \
             --acknowledge-cost --preset openai --model "$OPENAI_FAMILY_MODEL" \
-            --base-url https://oxionai.com/v1 --auth-mode bearer \
+            --base-url https://freemodel.in/v1 --auth-mode bearer \
             --scenarios acceptance --max-calls 7 --max-input-tokens 4096 \
             --max-output-tokens 512 --call-timeout 30s --overall-timeout 3m \
             --input-cost-per-mtok "$OPENAI_FAMILY_INPUT_PRICE" \
@@ -142,9 +142,9 @@ jobs:
             --out "$out/openai-family.json" >/dev/null 2>"$RUNNER_TEMP/openai-family-canary.stderr"
           openai_family_exit=$?
 
-          NEXAROUTE_CANARY_API_KEY="$OXIONAI_API_KEY" ./bin/nexaroute conformance canary \
+          NEXAROUTE_CANARY_API_KEY="$FREEMODEL_API_KEY" ./bin/nexaroute conformance canary \
             --acknowledge-cost --preset openai --model "$CLAUDE_FAMILY_MODEL" \
-            --base-url https://oxionai.com/v1 --auth-mode bearer \
+            --base-url https://freemodel.in/v1 --auth-mode bearer \
             --scenarios acceptance --max-calls 7 --max-input-tokens 4096 \
             --max-output-tokens 512 --call-timeout 30s --overall-timeout 3m \
             --input-cost-per-mtok "$CLAUDE_FAMILY_INPUT_PRICE" \
@@ -241,7 +241,7 @@ jobs:
                   (report.get("schema") == "conformance.live-canary.v1", "wrong report schema"),
                   (report.get("outcome") == "PASS", f"overall outcome is {report.get('outcome')}"),
                   (provider.get("dialect") == "openai_compatible", f"wrong dialect: {provider.get('dialect')}"),
-                  (host == "oxionai.com" and base_url == "https://oxionai.com/v1", f"wrong OxionAI base URL: {base_url}"),
+                  (host == "freemodel.in" and base_url == "https://freemodel.in/v1", f"wrong FreeModel base URL: {base_url}"),
                   (provider.get("model") == want["model"], "report model does not match dispatch input"),
                   (set(actual_ids) == scenario_ids and len(actual_ids) == len(scenario_ids), "selected scenario set is incomplete or contains duplicates"),
                   (all(statuses.get(sid) == "PASS" for sid in scenario_ids), "one or more acceptance scenarios did not PASS"),
@@ -278,14 +278,14 @@ jobs:
               errors.append("combined observed usage exceeds the operator-approved total cost ceiling")
 
           summary = {
-              "schema": "nexaroute.v0250-oxionai-acceptance.v1",
+              "schema": "nexaroute.v0250-freemodel-acceptance.v1",
               "release": "v0.25.0",
               "commit": os.environ.get("GITHUB_SHA", ""),
               "run_id": int(os.environ.get("GITHUB_RUN_ID", "0")),
               "event": os.environ.get("GITHUB_EVENT_NAME", ""),
               "result": "PASS" if not errors else "FAIL",
-              "provider": "oxionai",
-              "base_url": "https://oxionai.com/v1",
+              "provider": "freemodel",
+              "base_url": "https://freemodel.in/v1",
               "protocol": "openai_compatible",
               "model_scope": ["openai-family", "claude-family"],
               "max_cost_usd_total": max_total,
@@ -297,16 +297,16 @@ jobs:
           (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
           if errors:
               for error in errors:
-                  print(f"::error title=v0.25.0 OxionAI acceptance::{error}")
+                  print(f"::error title=v0.25.0 FreeModel acceptance::{error}")
               sys.exit(1)
-          print("Both OxionAI model-family canaries PASS; seven scenarios each; OpenAI-compatible live endpoint and combined cost ceiling verified.")
+          print("Both FreeModel model-family canaries PASS; seven scenarios each; OpenAI-compatible live endpoint and combined cost ceiling verified.")
           PY
 
-      - name: Upload combined OxionAI acceptance evidence
+      - name: Upload combined FreeModel acceptance evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: v0250-oxionai-acceptance-${{ github.sha }}-${{ github.run_id }}
+          name: v0250-freemodel-acceptance-${{ github.sha }}-${{ github.run_id }}
           path: .artifacts/provider-v025/
           if-no-files-found: error
           retention-days: 90
