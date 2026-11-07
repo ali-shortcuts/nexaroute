@@ -2118,7 +2118,10 @@ func TestGap2ValidateJournalOwnership(t *testing.T) {
 		return dir, &restoreJournalManifest{Format: restoreJournalFormat, ID: "12345678", State: "prepared",
 			Entries: []restoreJournalEntry{{Name: backupEntryConfig, Target: filepath.Join(t.TempDir(), "config.json")}}}
 	}
-	foreignUID := os.Getuid() + 1
+	foreignUID := 0
+	if os.Getuid() == foreignUID {
+		foreignUID = 1
+	}
 	t.Run("foreign directory owner fails validation", func(t *testing.T) {
 		dir, m := mkJournal(t, foreignUID, -1)
 		if err := validateJournal(dir, m); err == nil || !strings.Contains(err.Error(), "not the current user") {
