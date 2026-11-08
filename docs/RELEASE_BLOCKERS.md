@@ -22,8 +22,7 @@ The following required checks passed on exact current main `1d8ac1ba82ece8b589e9
 | `CodeQL (Go)` | success |
 | `Fresh Go coverage` (95.0% inclusive gate) | **99.29295896%** (43,956 / 44,269 statements; gate PASS) |
 
-The tree carries production Go with **no** `TODO`/`FIXME` markers, and every
-acceptance command already exists: `nexaroute provider-accept`,
+The repository-owned acceptance commands already exist: `nexaroute provider-accept`,
 `nexaroute external-accept`, `nexaroute vault-accept`,
 `nexaroute comfyui-accept`, `nexaroute conformance`. The existence of these commands does not establish that their acceptance criteria have been met.
 
