@@ -126,6 +126,25 @@ def endpoint_ok(raw, issuer_raw):
             return False
     return iu.scheme == "http" and loopback(iu.hostname) and loopback(u.hostname)
 
+def callback_ok(raw):
+    """Allow the documented local HTTP callback for any HTTPS IdP."""
+    try:
+        u = urllib.parse.urlparse(raw)
+    except Exception:
+        return False
+    if u.scheme == "https":
+        return True
+    if u.scheme != "http" or not allow_loopback:
+        return False
+    host = (u.hostname or "").rstrip(".").lower()
+    if host == "localhost":
+        return True
+    import ipaddress
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
 def fetch(url):
     proc = subprocess.run(
         ["curl", "-fsS", "--max-time", timeout, "-H", "Accept: application/json", url],
@@ -150,7 +169,7 @@ else:
 cu = urllib.parse.urlparse(callback)
 if not cu.scheme or not cu.hostname or cu.username or cu.query or cu.fragment or cu.path != "/admin/auth/oidc/callback":
     check("callback-shape", "FAIL", "callback must be an absolute URL whose path is exactly /admin/auth/oidc/callback, with no query or fragment")
-elif endpoint_ok(callback, issuer):
+elif callback_ok(callback):
     check("callback-shape", "PASS", sanitize(callback))
 else:
     check("callback-shape", "FAIL", "callback must be HTTPS (loopback HTTP only with --allow-loopback)")
