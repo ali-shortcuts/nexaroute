@@ -262,6 +262,54 @@ pf_pid=""
 
 kubectl_ns() { kubectl -n "$NAMESPACE" "$@"; }
 
+# service_account_cannot_list_pods <namespace> <service-account>: ask the
+# API server to evaluate the target identity without impersonating it. This
+# works for operators allowed to create SubjectAccessReviews but not to use
+# --as, and distinguishes a denied permission from an unavailable check.
+service_account_cannot_list_pods() {
+  local namespace="$1" service_account="$2" request response
+  request="$(python3 - "$namespace" "$service_account" <<'PYEOF'
+import json, sys
+namespace, name = sys.argv[1:]
+json.dump({
+    "apiVersion": "authorization.k8s.io/v1",
+    "kind": "SubjectAccessReview",
+    "spec": {
+        "user": f"system:serviceaccount:{namespace}:{name}",
+        "groups": [
+            "system:serviceaccounts",
+            f"system:serviceaccounts:{namespace}",
+            "system:authenticated",
+        ],
+        "resourceAttributes": {
+            "namespace": namespace,
+            "verb": "list",
+            "group": "",
+            "resource": "pods",
+        },
+    },
+}, sys.stdout)
+PYEOF
+)" || return 2
+  response="$(printf '%s\n' "$request" | kubectl create \
+    --raw='/apis/authorization.k8s.io/v1/subjectaccessreviews' -f - 2>/dev/null)" || return 2
+  printf '%s\n' "$response" | python3 -c '
+import json, sys
+try:
+    status = json.load(sys.stdin).get("status", {})
+except Exception:
+    sys.exit(2)
+if status.get("evaluationError"):
+    sys.exit(2)
+allowed = status.get("allowed")
+if allowed is False:
+    sys.exit(0)
+if allowed is True:
+    sys.exit(1)
+sys.exit(2)
+' 2>/dev/null
+}
+
 # port_forward <local-port>: start a port-forward to the release Service
 # in the background; call stop_port_forward when done. The retry loop
 # also checks the background process is still alive: in run 41216200624
@@ -999,10 +1047,15 @@ PY
   else
     ok "no Role/RoleBinding for the release service account"
   fi
-  if kubectl_ns auth can-i list pods --as="system:serviceaccount:${NAMESPACE}:${RELEASE}-nexaroute" 2>/dev/null | grep -qx no; then
-    ok "release service account cannot list pods"
+  if service_account_cannot_list_pods "$NAMESPACE" "${RELEASE}-nexaroute"; then
+    ok "release service account cannot list pods (SubjectAccessReview)"
   else
-    notrun "service-account can-i check (impersonation not permitted for this operator; RBAC absence above is the evidence)"
+    local sar_rc=$?
+    if [[ "$sar_rc" -eq 1 ]]; then
+      fail "release service account unexpectedly can list pods"
+    else
+      notrun "service-account SubjectAccessReview could not be completed"
+    fi
   fi
 
   # Persistence + graceful termination, measured in one pod restart:
@@ -1857,6 +1910,56 @@ PYEOF
     ok "self-test: live backup invocations use explicit loopback admin URL and are fail-guarded"
   else
     fail "self-test: live backup invocations must use an explicit loopback admin URL and an explicit fail guard"
+  fi
+
+  # 19. Evaluate least-privilege for the actual ServiceAccount with a
+  # SubjectAccessReview, not --as impersonation. The stub validates the
+  # requested user, groups and resource attributes, then exercises denied,
+  # allowed and indeterminate API-server responses.
+  mkdir -p "$tmp/sar-bin"
+  cat >"$tmp/sar-bin/kubectl" <<'EOF'
+#!/bin/sh
+[ "$#" -eq 4 ] \
+  && [ "$1" = "create" ] \
+  && [ "$2" = "--raw=/apis/authorization.k8s.io/v1/subjectaccessreviews" ] \
+  && [ "$3" = "-f" ] \
+  && [ "$4" = "-" ] || exit 2
+python3 -c '
+import json, sys
+try:
+    review = json.load(sys.stdin)
+except Exception:
+    sys.exit(4)
+spec = review.get("spec", {})
+expected = {
+    "user": "system:serviceaccount:nexaroute-test:nexaroute-test-app",
+    "groups": ["system:serviceaccounts", "system:serviceaccounts:nexaroute-test", "system:authenticated"],
+    "resourceAttributes": {
+        "namespace": "nexaroute-test", "verb": "list", "group": "", "resource": "pods"
+    },
+}
+sys.exit(0 if review.get("apiVersion") == "authorization.k8s.io/v1"
+         and review.get("kind") == "SubjectAccessReview" and spec == expected else 5)
+' || exit 3
+case "${SELFTEST_SAR_MODE:-}" in
+  denied) printf '%s\n' '{"status":{"allowed":false,"denied":false}}' ;;
+  allowed) printf '%s\n' '{"status":{"allowed":true,"denied":false}}' ;;
+  error) printf '%s\n' '{"status":{"allowed":false,"evaluationError":"test error"}}' ;;
+  *) exit 6 ;;
+esac
+EOF
+  chmod +x "$tmp/sar-bin/kubectl"
+  local sar_denied_rc=0 sar_allowed_rc=0 sar_error_rc=0
+  PATH="$tmp/sar-bin:/bin:/usr/bin" SELFTEST_SAR_MODE=denied \
+    service_account_cannot_list_pods "nexaroute-test" "nexaroute-test-app" || sar_denied_rc=$?
+  PATH="$tmp/sar-bin:/bin:/usr/bin" SELFTEST_SAR_MODE=allowed \
+    service_account_cannot_list_pods "nexaroute-test" "nexaroute-test-app" || sar_allowed_rc=$?
+  PATH="$tmp/sar-bin:/bin:/usr/bin" SELFTEST_SAR_MODE=error \
+    service_account_cannot_list_pods "nexaroute-test" "nexaroute-test-app" || sar_error_rc=$?
+  if [[ "$sar_denied_rc" -eq 0 && "$sar_allowed_rc" -eq 1 && "$sar_error_rc" -eq 2 ]]; then
+    ok "self-test: SubjectAccessReview distinguishes denied, allowed, and indeterminate without impersonation"
+  else
+    fail "self-test: SubjectAccessReview returned unexpected outcomes (denied=$sar_denied_rc allowed=$sar_allowed_rc error=$sar_error_rc)"
   fi
 }
 
