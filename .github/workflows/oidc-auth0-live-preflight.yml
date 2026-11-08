@@ -1,0 +1,94 @@
+name: OIDC Auth0 live preflight
+
+# This workflow validates the operator-owned Auth0 tenant's public OIDC
+# metadata and the sanitized NexaRoute configuration shape. It is a
+# preflight, not a browser-login verdict: interactive login, role denial,
+# logout, audit, and key-rotation cases remain operator-observed evidence.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oidc-auth0-live-preflight-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AUTH0_ISSUER: https://nexaroute-test.us.auth0.com/
+  AUTH0_CLIENT_ID: 7On0BN9U2u5K95PaFAwUYcUo3261DeDW
+  AUTH0_CALLBACK: http://localhost:8080/admin/auth/oidc/callback
+  AUTH0_ROLE_CLAIM: https://nexaroute.dev/roles
+
+jobs:
+  auth0-preflight:
+    name: Auth0 discovery and config preflight
+    runs-on: ubuntu-24.04
+    environment: conformance-live
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Confirm secret injection without revealing it
+        env:
+          NEXAROUTE_OIDC_CLIENT_SECRET: ${{ secrets.NEXAROUTE_OIDC_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$NEXAROUTE_OIDC_CLIENT_SECRET"
+          echo 'Auth0 client secret is present in the conformance-live environment.'
+
+      - name: Run repository preflight tests
+        run: bash scripts/test-oidc-live-preflight.sh
+
+      - name: Write sanitized Auth0 config shape
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/oidc-auth0
+          cat > .artifacts/oidc-auth0/config.json <<JSON
+          {
+            "admin": {
+              "oidc": {
+                "enabled": true,
+                "issuer_url": "${AUTH0_ISSUER}",
+                "client_id": "${AUTH0_CLIENT_ID}",
+                "client_secret_env": "NEXAROUTE_OIDC_CLIENT_SECRET",
+                "redirect_url": "${AUTH0_CALLBACK}",
+                "audience": "${AUTH0_CLIENT_ID}",
+                "role_claim": "${AUTH0_ROLE_CLAIM}",
+                "role_mappings": {"nexaroute-admin": "admin"}
+              }
+            }
+          }
+          JSON
+          chmod 600 .artifacts/oidc-auth0/config.json
+
+      - name: Fetch Auth0 discovery and JWKS preflight
+        run: |
+          set -euo pipefail
+          scripts/oidc-live-preflight.sh \
+            --issuer "$AUTH0_ISSUER" \
+            --callback "$AUTH0_CALLBACK" \
+            --audience "$AUTH0_CLIENT_ID" \
+            --config .artifacts/oidc-auth0/config.json \
+            --allow-loopback \
+            --timeout 30 \
+            --out .artifacts/oidc-auth0/preflight.json
+          python3 - <<'PY'
+          import json
+          with open('.artifacts/oidc-auth0/preflight.json', encoding='utf-8') as fh:
+              report = json.load(fh)
+          assert report['schema'] == 'nexaroute.oidc-preflight.v1'
+          assert report['overall'] == 'PASS', report
+          assert all(check['status'] == 'PASS' for check in report['checks']), report
+          print('Auth0 OIDC preflight PASS: discovery, issuer pinning, endpoints, PKCE, JWKS, callback, and config shape')
+          PY
+
+      - name: Upload redacted preflight report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: oidc-auth0-preflight-${{ github.sha }}
+          path: .artifacts/oidc-auth0/preflight.json
+          if-no-files-found: error
+          retention-days: 90
