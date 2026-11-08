@@ -4,11 +4,11 @@ This page exists so nobody has to rediscover the answer. It states the current
 blocking state, classifies every blocker by what kind of action can clear it,
 and gives the literal command that produces the missing evidence.
 
-Last updated: 2026-11-01, against `main` `436c4e98618eed0c41e59059eae7eca5f05dd190` (PRs #821 and #822 merged). A subsequent working branch is not covered by these main results.
+Last updated: 2026-11-08, against `main` `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0` (PR #869 merged). The older 2026-11-01 snapshot is superseded by the exact-main CI, Security, Coverage and Kubernetes evidence below. Every result remains bound to its named SHA.
 
 ## 1. What is *not* the problem
 
-The following required checks passed on main `436c4e98618eed0c41e59059eae7eca5f05dd190` (CI run 41317289767, Security run 41317289831, Coverage run 41317289862). These checks do not establish product completeness:
+The following required checks passed on exact current main `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0`: [CI run 42490427984](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490427984), [Security run 42490428266](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490428266), and [Coverage run 42490428148](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490428148). These checks do not establish product completeness:
 
 | Check (required by ruleset `main-required-checks`, 9 contexts) | Result |
 |---|---|
@@ -20,7 +20,7 @@ The following required checks passed on main `436c4e98618eed0c41e59059eae7eca5f0
 | `integration-redis` | success |
 | `Go vulnerability scan` | success |
 | `CodeQL (Go)` | success |
-| `Fresh Go coverage` (95.0% inclusive gate) | success |
+| `Fresh Go coverage` (95.0% inclusive gate) | **99.29295896%** (43,956 / 44,269 statements; gate PASS) |
 
 The tree carries production Go with **no** `TODO`/`FIXME` markers, and every
 acceptance command already exists: `nexaroute provider-accept`,
@@ -57,22 +57,20 @@ These cannot be satisfied by any amount of code or permission:
 
 | Issue | What is missing | Who can supply it |
 |---|---|---|
-| #646 | Paid provider authorization, endpoint, model/account, spend ceiling | Operator |
-| #647 | An organizational OIDC tenant (issuer, client, redirect URI) | Operator |
-| #648 | A staging/HA Vault with a least-privilege KV policy | Operator |
-| #649 | A disposable Vault Transit instance, key and `encrypt`/`decrypt`/`rewrap` policy | Operator |
-| #650 | A disposable Kubernetes cluster (kind or real) | Operator |
-| #651 | A ComfyUI host with a real text-to-video model and workflow | Operator |
-| #652 | Two independent hosts sharing PostgreSQL + Redis, behind one address | Operator |
+| #647 | Complete interactive OIDC login and the remaining mapped/unmapped-user, logout, audit and provider-key-rotation observations against the approved test tenant | Operator |
+| #649 | Operator-managed Vault Transit acceptance for the remaining key-version, invalid-ciphertext and Gateway Transit-mode cases | Operator |
+| #651 | A provisioned ComfyUI server, compatible real text-to-video model and workflow for an actual inference | Operator |
+| #652 | Two independent hosts sharing PostgreSQL + Redis, behind one address, plus an authorized backup/restore drill | Operator |
 
-### Class C — one real defect, already fixed but unvalidated live
+Issue-state caveats are separate from missing infrastructure: #648 is closed with `state_reason=not_planned`, which the v0.25.0 completion-only gate rejects. #647 and #653 are closed as completed, but their latest disclosure comments challenge the merits or authority of those closures. #650 has a passing current-main technical run, but its closure authority is also recorded as pending owner disposition. Do not infer acceptance from the GitHub state alone; see §5.
 
-`k8s-live-acceptance` **failed** on `89b608dd` (run 41259193878) at the
-`Run live acceptance` step. The script fixes that followed — #809 (loopback
-sidecar stub), #812 (readiness by revision, rollback port-forward, termination
-precision), #813 (new ReplicaSet hash after upgrade/rollback), #817 (unbound
-termination wait), #818 (preserve pod termination status) — are merged but have
-**never run against a live cluster**. #650 stays open until they do.
+### Class C — Kubernetes disposable-cluster acceptance now passes on current main; issue disposition is separate
+
+The earlier failure on `89b608dd` (run 41259193878) is historical and is superseded for the disposable-cluster technical acceptance by [PR #869](https://github.com/ali-shortcuts/nexaroute/pull/869), merged as current main `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0`.
+
+The post-merge [Kubernetes live acceptance run 42490453403](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490453403) ran on that exact SHA. Its inspected [raw artifact 13621468111](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490453403/artifacts/13621468111) records the upgraded release Pod Ready, the PostgreSQL-backed Gateway Ready, denial of pod-list access for the release ServiceAccount through SubjectAccessReview, and `RESULT: failures=0 not_run=0`. The job completed successfully. See [the retained acceptance report](reports/K8S_LIVE_ACCEPTANCE_2026-11-08.md).
+
+This is a PASS for the exercised disposable `kind` workflow on SHA `1d8ac1b`; it is not proof of production-cluster readiness, independent-host failure tolerance, or measured multi-host RPO/RTO, and it does not satisfy #652. Issue #650 is currently closed/completed, but [its latest disclosure](https://github.com/ali-shortcuts/nexaroute/issues/650#issuecomment-6722959520) says the closure authority is unattributable and keep-closed versus reopen remains pending the owner's disposition. This document records the technical evidence without deciding that issue-state question.
 
 ## 3. Supplemental dispatches and their evidence limits
 
@@ -143,8 +141,7 @@ cleanup cases. For #652, the infrastructure operator must provision two
 independent hosts, shared PostgreSQL and Redis, a load-balancing endpoint and
 recoverable backup, then coordinate cold-start, replica loss, both backend
 outages and restore while recording topology, RPO and RTO. The single-host
-runner does not satisfy this. For #650 inspect every live kind log and do not
-claim production topology from it. For #653 inspect the exact-SHA soak summary
+runner does not satisfy this. For #650, the post-merge run 42490453403 and artifact 13621468111 provide a passing disposable-kind result on SHA `1d8ac1b`; inspect the retained [acceptance report](reports/K8S_LIVE_ACCEPTANCE_2026-11-08.md). If the final release candidate is a different SHA, rerun and inspect acceptance on that exact frozen candidate. Never claim production topology from a hosted-runner `kind` result. For #653 inspect the exact-SHA soak summary
 **and samples**, all stages and stress rounds; a successful smoke is not a
 2-hour soak. Each operator must retain a sanitized, provenance-bound report for
 independent review. External CLI reports need an authorized workflow/artifact
@@ -182,11 +179,9 @@ the strict gate's manifest check passes; the earlier unsigned proposal survives
 only in git history. An empty manifest never supplies acceptance evidence, and
 any later non-empty or malformed manifest makes the gate refuse again.
 
-Run each real authorized acceptance and attach sanitized evidence, then close
-#646–#653 as completed only after independent review; close #654 last. Record
-exact-SHA metadata as described in [RELEASE_GATE.md](RELEASE_GATE.md). Review
-actual artifact contents and topology independently. The gate checks metadata,
-not the truth or completeness of external acceptance.
+Run each required acceptance and attach sanitized evidence, then close #646–#653 as completed only after independent review; close #654 last. Record exact-SHA metadata as described in [RELEASE_GATE.md](RELEASE_GATE.md). Review actual artifact contents and topology independently. The gate checks metadata, not the truth or completeness of external acceptance.
+
+**2026-11-08 tracker-state reconciliation:** #646 is closed/completed after the recorded FreeModel canary passed 7/7 scenarios for each selected model; preserve the owner-selected provider/protocol scope and bind final metadata to the release candidate. #647 is closed/completed, but its latest disclosure says the Auth0 run was discovery/JWKS/config-shape preflight only; interactive login, unmapped-user denial, logout/audit and provider-controlled key rotation remain unverified, so the closure is not release evidence pending owner disposition. #648 is closed `not_planned`; v0.25.0's completion-only gate refuses that state even though the narrowed single-host Vault KV evidence is recorded. #649, #651 and #652 remain open for Transit-specific acceptance, real ComfyUI inference and independent-host HA respectively. #650 has the passing disposable-kind run above, while its closure attribution remains pending owner disposition. #653 has valid coverage/soak evidence on `56c7ddfdcdb4869562d4b53187354d0033f688f0` (10/10 stages, 7,209 seconds hot-reload, 28,802 resource samples), but its latest disclosure records another automatic closure and pending owner disposition; its soak evidence is not a substitute for a fresh exact-candidate soak after the final main freeze. #654 remains open and must be closed last.
 
 ## 6. What this gate will never do
 
