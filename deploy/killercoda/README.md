@@ -2,9 +2,13 @@
 
 This directory contains the disposable Kubernetes operator runbook for issue
 [#652](https://github.com/ali-shortcuts/nexaroute/issues/652). It prepares a
-candidate topology; it does **not** provide evidence that the topology has
-been executed. The acceptance verdict remains `NOT_RUN` until an authorized
-operator runs the real drill and commits sanitized evidence.
+candidate topology; this README does **not** provide evidence that this
+Killercoda profile has been executed. The profile-specific status is `NOT_RUN`
+until an authorized operator runs the drill and commits sanitized evidence.
+Issue #652 remains **OPEN / NOT COMPLETE**: separate, limited live evidence is
+recorded in the [iximiuz recovery report](../../docs/reports/HA_ACCEPTANCE_IXIMIUZ_BACKEND_RECOVERY_2026-11-09.md),
+but it does not satisfy the issue's remaining independent-host persistence,
+backend-failover, and measured RPO/RTO criteria.
 
 ## Topology and scope
 

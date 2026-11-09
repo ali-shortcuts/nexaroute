@@ -125,9 +125,11 @@ Go 1.24+ is required for development only; end users need neither Go nor git.
 ./scripts/verify.sh
 ```
 
-`verify.sh` checks formatting, repeated shuffled tests, `go vet`, the race
-detector, JavaScript syntax, short fuzz runs, benchmarks, and static Linux
-builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
+`verify.sh` checks formatting, project regression harnesses, the full Go test
+suite, `go vet`, the race detector, JavaScript syntax and UI tests, browser
+acceptance, short fuzz runs, and static Linux builds for amd64 and arm64. The
+script does not run benchmarks or repeated shuffled test passes. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Documentation
 

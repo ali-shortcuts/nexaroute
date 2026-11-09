@@ -134,18 +134,29 @@ Stop a foreground instance before starting the service.
 
 ## Release assets
 
-Every stable GitHub Release carries exactly these four files:
+The current stable-release workflow builds, checks, and uploads this asset set
+for each version. Older published tags may predate the current set; check the
+selected release's asset list before relying on a particular file.
 
 ```text
 nexaroute-linux-amd64
 nexaroute-linux-arm64
+nexaroute-videogen-linux-amd64
+nexaroute-videogen-linux-arm64
 install.sh
+video.example.json
+VIDEO_GATEWAY.md
+RELEASE_NOTES.md
 SHA256SUMS
+nexaroute-${VERSION}-sbom.spdx.json
 ```
 
-The embedded UI is inside each static binary. Both CLI and `/api/hello` report
-the release version. `install.sh` in a release is byte-identical to
-`scripts/install.sh` in the source tree at that tag.
+The installer verifies and installs the matching Gateway and Video CLI
+binaries; the remaining files provide video configuration/documentation,
+release notes, checksums, and the versioned SBOM. The embedded UI is inside each
+static Gateway binary. Both CLI and `/api/hello` report the release version.
+`install.sh` in a release is byte-identical to `scripts/install.sh` in the
+source tree at that tag.
 
 ## Maintainer release procedure (automatic)
 
@@ -153,7 +164,7 @@ Releases are published by CI, never by hand. Pushing a `v*` tag on `main`
 triggers `.github/workflows/release.yml`, which runs the full verification,
 stress, smoke, and installer-lifecycle suites, builds both architectures,
 generates `install.sh` and `SHA256SUMS`, verifies the checksums, and publishes
-the GitHub Release with the four assets above. To rehearse without publishing:
+the GitHub Release with the assets above. To rehearse without publishing:
 
 ```bash
 ./scripts/build-release.sh v0.24.0

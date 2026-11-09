@@ -1281,10 +1281,11 @@ func TestContinue95GatewayBackupHelpers(t *testing.T) {
 		t.Fatal("syncDir missing directory accepted")
 	}
 	// validateBundledConfig: bad JSON and missing config entry.
-	if _, _, err := validateBundledConfig("synthetic-stage", map[string][]byte{"config.json": []byte(`not json`)}); err == nil {
+	validationStage := t.TempDir()
+	if _, _, err := validateBundledConfig(validationStage, map[string][]byte{"config.json": []byte(`not json`)}); err == nil {
 		t.Fatal("validateBundledConfig bad JSON accepted")
 	}
-	if _, _, err := validateBundledConfig("synthetic-stage", map[string][]byte{}); err == nil {
+	if _, _, err := validateBundledConfig(validationStage, map[string][]byte{}); err == nil {
 		t.Fatal("validateBundledConfig missing config accepted")
 	}
 	// readAndVerifyBundle: truncated entry.
