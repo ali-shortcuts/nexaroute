@@ -1,0 +1,45 @@
+{
+  "schema": "NEXAROUTE_ACCEPTANCE_V1",
+  "issue": 649,
+  "result": "PASS",
+  "evidence_class": "single-host-multi-node-raft",
+  "date": "2026-11-09",
+  "code_sha": "debbe202cd5895e275528fe7c162f7b2969c29f7",
+  "vault": {
+    "image": "hashicorp/vault:latest",
+    "version": "2.2.1",
+    "storage": "raft",
+    "nodes": 3,
+    "all_voters": true,
+    "api_scheme": "http-loopback"
+  },
+  "checks": {
+    "raft_initialized_unsealed": "PASS",
+    "leader_failover_and_rejoin": "PASS",
+    "transit_round_trip": "PASS",
+    "least_privilege": "PASS",
+    "invalid_ciphertext": "PASS",
+    "wrong_and_revoked_token": "PASS",
+    "nxs1_to_nxs2_migration": "PASS",
+    "gateway_nxs2_boot": "PASS",
+    "tamper_rejection": "PASS",
+    "rotation_versions_1_2_3": "PASS",
+    "rewrap_and_verify": "PASS",
+    "backup_recovery": "PASS",
+    "vault_unavailable_fail_closed": "PASS"
+  },
+  "observations": {
+    "migrated_fields": 1,
+    "rewrapped_fields": 1,
+    "nxs2_fields": 1,
+    "transit_key_versions": 3,
+    "verified_fields": 1,
+    "secrets_retained": false
+  },
+  "boundaries": [
+    "not-production",
+    "not-hsm-or-kms",
+    "not-multi-host",
+    "not-managed-staging"
+  ]
+}
