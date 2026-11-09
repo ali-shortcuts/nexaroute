@@ -1,20 +1,23 @@
 # External verification runbook (M4-7)
 
+> **Current status snapshot:** this runbook contains historical acceptance entries and is not, by itself, a current release verdict. For the latest Issue states, exact evidence classes, current-main checks, missing artifacts and v0.25.0 requirements, use [the 2026-11-09 release-readiness reconciliation](reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md). In particular, older `NOT_RUN` statements below may be superseded by later operator reports, while a later GitHub Issue closure does not automatically prove acceptance. Preserve the explicit distinction between local/loopback, single-host, staging, multi-host and production evidence.
+
 ## Current refresh — 2026-11-09
 
-The current main tip is `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`.
-Main CI, Security and Coverage passed on that SHA. Runner-only, non-billable
-acceptance dispatches were started on this SHA for Kubernetes, Vault, OIDC,
-single-host HA, independent-environment verification, soak and the architecture
-audit. Their run IDs and artifacts must be inspected before they become release
-evidence. These runs do not provide organizational IdP, staging Vault, real
-provider, ComfyUI or independent-host HA evidence.
+The latest main tip is `08b8aed95f550d3068ab34bac6b29411755161c3`, a documentation-only refresh (PR #878) on
+top of application-code SHA `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`.
+Main CI, Security and Coverage passed on `15a14f92`; those results remain bound
+to that exact SHA, not relabeled as checks on `08b8aed95f550d3068ab34bac6b29411755161c3`. Runner-only,
+non-billable acceptance dispatches were started on `15a14f92` for Kubernetes,
+Vault, OIDC, single-host HA, independent-environment verification, soak and the
+architecture audit. Inspect their run IDs and artifacts before treating them as
+release evidence. These runs do not provide organizational IdP, staging Vault,
+real provider, ComfyUI or independent-host HA evidence.
 
 This document contains a long chronological history. Any older paragraph that
 names another commit as current main, says a dispatch was unavailable, or says a
-newer runner result was not run is historical and is superseded only for the
-current SHA and the newly dispatched runs. No result transfers across SHAs, and
-no issue is closed by this note.
+newer runner result was not run is historical. No result transfers across SHAs,
+and no issue is closed by this note.
 
 Three NexaRoute integrations depend on external systems that the
 project's own CI cannot provide: an OIDC identity provider, HashiCorp

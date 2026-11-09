@@ -4,12 +4,13 @@
 # Canonical measurement (see .github/workflows/coverage-report.yml):
 #   go test -count=1 -coverprofile=.artifacts/coverage/coverage.out ./...
 # This gate validates the profile with `go tool cover -func` and compares
-# the raw covered/total statement counts, not its rounded display percentage.
-# No package, file, or statement is excluded, and the denominator
-# is whatever the profile contains: excluding a package, lowering the
-# threshold, or changing the denominator to make the gate pass is not
-# acceptable. The threshold is inclusive: a total exactly equal to the
-# threshold passes.
+# exact covered/total statement counts, not its rounded display percentage.
+# No package or Go source file is excluded: the denominator is every
+# instrumented statement block inside a declared function, matching Go's
+# standard tool. Blocks outside functions are ignored by `go tool cover` and
+# by this gate; excluding a package/file, lowering the threshold, or otherwise
+# changing the denominator to make the gate pass is not acceptable. The
+# threshold is inclusive: a total exactly equal to it passes.
 #
 # The gate is deterministic: the same profile always yields the same
 # verdict, with no network, no clock, and no sleep. Any failure to read
@@ -63,39 +64,34 @@ if [[ ! "$total" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   exit 1
 fi
 
-# Parse profile counters as arbitrary-precision integers and compare to the
-# exact decimal threshold using integer cross-multiplication. Floating point
-# rounding (including awk's doubles) must never affect the gate verdict.
-if ! counts="$(python3 - "$profile" "$threshold" "$total" <<'PYCODE'
+# Count only coverage blocks that overlap declared function extents, matching
+# `go tool cover -func`; then compare to the exact decimal threshold using
+# integer cross-multiplication. Floating point rounding must never affect the
+# gate verdict, and blocks outside functions cannot inflate it.
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+count_helper="$script_dir/../.github/scripts/coverage-profile-counts.go"
+if ! statement_counts="$(go run "$count_helper" "$profile" 2>&1)"; then
+  echo "::error::coverage gate: could not count function statements in $profile" >&2
+  printf '%s\n' "$statement_counts" >&2
+  exit 1
+fi
+read -r covered_statements total_statements <<< "$statement_counts"
+if ! counts="$(python3 - "$threshold" "$total" "$covered_statements" "$total_statements" <<'PYCODE'
 import sys
 
-path, threshold, displayed = sys.argv[1:]
+threshold, displayed, covered_raw, total_raw = sys.argv[1:]
+if not covered_raw.isdigit() or not total_raw.isdigit():
+    print('coverage gate: invalid function statement counts', file=sys.stderr)
+    sys.exit(1)
+covered, total = int(covered_raw), int(total_raw)
+if total <= 0 or covered < 0 or covered > total:
+    print('coverage gate: invalid function statement denominator or numerator', file=sys.stderr)
+    sys.exit(1)
 whole, _, fraction = threshold.partition('.')
 scale = 10 ** len(fraction)
 threshold_scaled = int(whole) * scale + (int(fraction) if fraction else 0)
-covered = total = 0
-try:
-    with open(path, encoding='utf-8') as profile:
-        mode = next(profile).strip()
-        if mode not in ('mode: set', 'mode: count', 'mode: atomic'):
-            raise ValueError('invalid profile mode')
-        for number, line in enumerate(profile, 2):
-            fields = line.split()
-            if len(fields) != 3 or not fields[1].isdigit() or not fields[2].isdigit():
-                raise ValueError(f'invalid counters on line {number}')
-            statements, executions = int(fields[1]), int(fields[2])
-            total += statements
-            if executions > 0:
-                covered += statements
-    if total <= 0:
-        raise ValueError('empty coverage denominator')
-except (OSError, UnicodeError, ValueError, StopIteration) as err:
-    print(f'coverage gate: invalid profile: {err}', file=sys.stderr)
-    sys.exit(1)
-# go tool cover reports one decimal and ignores profile blocks outside
-# functions. Detect inconsistent totals rather than allowing such blocks to
-# inflate the gate. This rounded cross-check is not a complete authenticity
-# proof for small differences within the display's rounding interval.
+# go tool cover reports one decimal. This cross-check ensures the AST-based
+# statement counts agree with its displayed total within that rounding range.
 dwhole, _, dfrac = displayed.partition('.')
 dscale = 10 ** len(dfrac)
 display_scaled = int(dwhole) * dscale + (int(dfrac) if dfrac else 0)

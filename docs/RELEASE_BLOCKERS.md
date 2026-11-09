@@ -1,23 +1,27 @@
 # Why the v0.25.0 release is blocked, and exactly what unblocks it
 
+> **Current source of truth (2026-11-09):** read [the current release-readiness reconciliation](reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md) first. This file retains detailed operator procedures and historical SHA-bound evidence; older status snapshots in the sections below are not current-main acceptance claims. The original application-code baseline was `b9b5c0c097b5b64d6556029952893d0feacf87ef`; latest `main` is `08b8aed95f550d3068ab34bac6b29411755161c3` (documentation-only PR #878 on top of tested code SHA `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`).
+
 This page exists so nobody has to rediscover the answer. It states the current
 blocking state, classifies every blocker by what kind of action can clear it,
 and gives the literal command that produces the missing evidence.
 
-Last updated: 2026-11-09. The current main tip observed for this refresh is
+Last updated: 2026-11-09. The latest main tip observed for this refresh is
+`08b8aed95f550d3068ab34bac6b29411755161c3`; it is a documentation-only descendant of application-code SHA
 `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`. The local Vault Transit report is
 bound to `35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1`; historical GitHub results
 below remain tied to their own SHAs. Acceptance dispatches must be checked again
 against a frozen candidate before release; this document does not transfer
-historical evidence to the current tip.
+historical evidence to the latest tip.
 
 ## 1. What is *not* the problem
 
 Historical required-check results below were recorded on SHA `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0`; they are not asserted current on
-`15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`. The current main push workflows
-also passed on `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7` (CI, Security and
-Coverage), but that does not establish product completeness or replace the
-manual acceptance gates below:
+`08b8aed95f550d3068ab34bac6b29411755161c3`. Main CI, Security and Coverage passed on application-code SHA
+`15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`; the later `08b8aed95f550d3068ab34bac6b29411755161c3` commit only
+refreshes documentation, and those results remain attributed to `15a14f92`.
+They do not establish product completeness or replace the manual acceptance
+gates below:
 
 | Check (required by ruleset `main-required-checks`, 9 contexts) | Result |
 |---|---|
@@ -29,7 +33,7 @@ manual acceptance gates below:
 | `integration-redis` | success |
 | `Go vulnerability scan` | success |
 | `CodeQL (Go)` | success |
-| `Fresh Go coverage` (95.0% inclusive gate) | **99.29295896%** (43,956 / 44,269 statements; gate PASS) |
+| `Fresh Go coverage` (95.0% inclusive gate) | CI PASS; exact Go function count recomputed from artifact 13659449395: **43,899 / 44,222 = 99.2696%** (47 covered raw-profile statements outside functions are ignored by `go tool cover`) |
 
 The repository-owned acceptance commands already exist: `nexaroute provider-accept`,
 `nexaroute external-accept`, `nexaroute vault-accept`,

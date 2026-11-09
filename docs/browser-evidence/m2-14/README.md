@@ -38,12 +38,14 @@ Chromium host (developer machine or browser-capable CI).
 
 ## Committed CI baseline
 
-The capture matrix above is now committed as CI-produced evidence:
-112 screenshots + `manifest.json` (SHA-256 per shot) + `PROVENANCE.md`,
-from the green `Browser evidence` run
-[39302326369](https://github.com/ali-shortcuts/nexaroute/actions/runs/39302326369)
-on `main` at `d33c5c7c` (axe: zero serious/critical violations).
-A re-run diffs against the committed manifest and reports drift.
+The adjacent `manifest.json` records 120 screenshot entries and 30 axe result
+groups. `PROVENANCE.md` identifies the browser-capable CI run
+[42098606113](https://github.com/ali-shortcuts/nexaroute/actions/runs/42098606113),
+source revision `7e04721efba2a9f640b7309393d5a820cd7628a8`, and reports no
+serious or critical axe violations. It also records that this fixture set was
+proposed through a pull request. All 120 PNG payloads referenced by the
+manifest are present in this directory's subfolders. A re-run compares captures
+with the manifest and reports drift.
 
 ## Flow-evidence index (coverage that exists today, per flow)
 

@@ -5,7 +5,7 @@ clients across many LLM providers and models — most commonly
 **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or
 Anthropic-compatible providers**.
 
-Current release: **v0.24.0** — see [release notes](docs/releases/v0.24.0.md). The v0.25.0 draft is blocked; see the [completion checklist](docs/reports/FINAL_COMPLETION_CHECKLIST.md).
+Current release: **v0.24.0** — see [release notes](docs/releases/v0.24.0.md). The v0.25.0 draft is blocked; use the [current release-readiness reconciliation](docs/reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md) for the current Issue/evidence/CI status. The [completion checklist](docs/reports/FINAL_COMPLETION_CHECKLIST.md) is a historical owner handoff.
 
 ## Install / Update
 
@@ -125,9 +125,11 @@ Go 1.24+ is required for development only; end users need neither Go nor git.
 ./scripts/verify.sh
 ```
 
-`verify.sh` checks formatting, repeated shuffled tests, `go vet`, the race
-detector, JavaScript syntax, short fuzz runs, benchmarks, and static Linux
-builds for amd64 and arm64. See [CONTRIBUTING.md](CONTRIBUTING.md).
+`verify.sh` checks formatting, project regression harnesses, the full Go test
+suite, `go vet`, the race detector, JavaScript syntax and UI tests, browser
+acceptance, short fuzz runs, and static Linux builds for amd64 and arm64. The
+script does not run benchmarks or repeated shuffled test passes. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Documentation
 

@@ -1,5 +1,7 @@
 # v0.25.0 completion checklist — blocked, not a release approval
 
+> **Historical handoff snapshot — 2026-11-01.** This checklist is not the current Issue register or a release approval. For the latest main SHA, current #646–#654 states, exact-SHA workflows, evidence classes and remaining dependencies, use the [current release-readiness reconciliation](docs/reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md). Do not use this older snapshot to infer that a current acceptance has not run or that a closed Issue is validly complete.
+
 Rechecked 2026-11-01. This is a status and operator handoff, not an approval,
 a signed exclusion, a complete audit, or evidence for a later SHA. Determine
 current main and both PR heads again before relying on any historical result.

@@ -10,10 +10,13 @@ names if needed, and start the gateway with it:
   priority 0 serves first, priority 1 is the fallback.
 - `coding.json` — a stable public alias `coding` backed by an explicit
   candidate pool spanning an OpenAI and an Anthropic deployment.
-  `/admin/api/route-preview?model=coding` shows how the pool is scheduled.
+  `/admin/api/route-preview?model=coding` previews candidate eligibility and
+  ordering; it does not send a live provider request.
 - `local-ollama.json` — a local Ollama instance, no API key.
 
-Every example is loaded and validated by an automated test
-(`internal/config` examples test), so they cannot silently rot.
+`internal/config/examples_test.go` (`TestExampleConfigsLoadAndValidate`) loads
+and validates every example JSON. This checks configuration loadability; it
+does not prove that external provider credentials work or that every documented
+scenario has been exercised end to end.
 API keys are referenced by env var NAME only — never put key
 values in these files.

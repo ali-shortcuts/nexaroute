@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,27 @@ func TestRuntimeDisabled(t *testing.T) {
 	if err != nil || r != nil {
 		t.Fatalf("disabled runtime=%v err=%v", r, err)
 	}
+}
+
+func TestRuntimeStartWithAlreadyCanceledContextFailsClosed(t *testing.T) {
+	const tokenEnv = "NEXAROUTE_TEST_VIDEO_TOKEN"
+	t.Setenv(tokenEnv, "test-video-token-for-canceled-start")
+	r, err := runtime.New(video.Config{
+		Enabled: true, StorePath: "jobs.json", StorageRoot: "assets",
+		QueueSize: 4, Workers: 1, AuthTokenEnv: tokenEnv, DevelopmentFakeProvider: true,
+	}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := r.Start(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Start with an already-canceled context = %v, want context.Canceled", err)
+	}
+	// A failed startup must have stopped the worker and closed its queue;
+	// Close remains safe and idempotent for callers cleaning up a failed start.
+	r.Close()
 }
 
 func TestRuntimeEnabledFailsClosedWithoutAuthToken(t *testing.T) {
