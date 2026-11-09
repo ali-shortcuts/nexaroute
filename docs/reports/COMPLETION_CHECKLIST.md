@@ -1,4 +1,6 @@
-# NOT COMPLETE — completion checklist (17 DONE, 2 IN PROGRESS; 33 items remain)
+# NOT COMPLETE — completion checklist (historical engineering programme)
+
+> **Historical engineering checklist.** Its baseline is `main` at `24b675a` and it was reconciled on 2026-10-13. It is retained as the original implementation programme, not the current release status. For current Issue states and release evidence, see [current release-readiness reconciliation](docs/reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md).
 
 Repository: `ali-shortcuts/nexaroute`
 Baseline: `main` at `24b675a0725d0b98b675159ee5b7a9d973b2a338` (reconciled 2026-10-13; previous baseline `dcb9f9b3c0352d23f1dfa599ea58450b072406c0`)
