@@ -344,18 +344,43 @@ func (r *Runtime) Start(ctx context.Context) error {
 		defer close(workerDone)
 		r.Workers.Run(workerCtx)
 	}()
+	// Startup must fail closed when its parent is already canceled. Both
+	// Ready and Done can be closed at the same time, so relying on select
+	// alone makes the outcome random and can let a canceled Gateway start.
+	stopWorkers := func() {
+		workerCancel()
+		if r.Queue != nil {
+			r.Queue.Close()
+		}
+		<-workerDone
+	}
+	if err := workerCtx.Err(); err != nil {
+		stopWorkers()
+		return err
+	}
 	select {
 	case <-r.Workers.Ready():
 	case <-workerCtx.Done():
-		workerCancel()
-		<-workerDone
-		return workerCtx.Err()
+		err := workerCtx.Err()
+		stopWorkers()
+		return err
+	}
+	// The context may have been canceled in the same scheduling window in
+	// which the worker readiness signal won the select above.
+	if err := workerCtx.Err(); err != nil {
+		stopWorkers()
+		return err
 	}
 	if err := r.Orchestrator.Recover(workerCtx); err != nil {
-		workerCancel()
-		r.Queue.Close()
-		<-workerDone
+		stopWorkers()
 		return fmt.Errorf("recover persisted video jobs: %w", err)
+	}
+	// Recovery implementations and stores may complete successfully after
+	// cancellation when there is no pending work; never report startup ready
+	// in that case.
+	if err := workerCtx.Err(); err != nil {
+		stopWorkers()
+		return err
 	}
 	// Retention (#420 item 5; #461 code-render): when configured,
 	// prune terminal jobs past the retention window once at startup
