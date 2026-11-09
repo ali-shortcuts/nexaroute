@@ -1,5 +1,21 @@
 # External verification runbook (M4-7)
 
+## Current refresh — 2026-11-09
+
+The current main tip is `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`.
+Main CI, Security and Coverage passed on that SHA. Runner-only, non-billable
+acceptance dispatches were started on this SHA for Kubernetes, Vault, OIDC,
+single-host HA, independent-environment verification, soak and the architecture
+audit. Their run IDs and artifacts must be inspected before they become release
+evidence. These runs do not provide organizational IdP, staging Vault, real
+provider, ComfyUI or independent-host HA evidence.
+
+This document contains a long chronological history. Any older paragraph that
+names another commit as current main, says a dispatch was unavailable, or says a
+newer runner result was not run is historical and is superseded only for the
+current SHA and the newly dispatched runs. No result transfers across SHAs, and
+no issue is closed by this note.
+
 Three NexaRoute integrations depend on external systems that the
 project's own CI cannot provide: an OIDC identity provider, HashiCorp
 Vault, and an OS keyring. The implementations are covered by
@@ -130,9 +146,11 @@ gateway. It is an explicit opt-in (`NEXAROUTE_KEY_PROVIDER=transit` with
 `NEXAROUTE_TRANSIT_ENABLED=true`)
 with strict timeouts, response-size limits, redirect rejection, redacted
 errors, and no local fallback. CI exercises the protocol against a fake
-Vault API only. **No real Vault Transit acceptance run has been
-executed**; do not claim HSM/KMS isolation or production readiness until
-the procedure below is run and recorded.
+Vault API. A sanitized real Vault 1.18.5 local-loopback acceptance was
+executed on code SHA `35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1` and is
+recorded separately; it does not establish staging, HA, HSM/KMS or
+production readiness. The procedure below remains required for
+operator-managed staging acceptance.
 
 Procedure:
 
@@ -155,7 +173,7 @@ AppRole/Kubernetes auth flow (the helper takes a static token from
 the environment; token acquisition is the operator's supervisor's
 job).
 
-### Vault Transit (`nxs2`) acceptance procedure — NOT_RUN
+### Vault Transit (`nxs2`) acceptance procedure — staging NOT_RUN
 
 Run this only in a disposable environment with operator-authorized
 credentials. It is intentionally separate from CI.
