@@ -6,11 +6,11 @@
 
 - Repository: `ali-shortcuts/nexaroute`
 - Audited branch: `main`
-- Audited main SHA: `b9b5c0c097b5b64d6556029952893d0feacf87ef`
+- Audited main SHA: `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7` (two documentation-only commits ahead of the previously audited application baseline `b9b5c0c097b5b64d6556029952893d0feacf87ef`; PR #876 added the historical audit report).
 - Snapshot date: 2026-11-09
 - Current release target documented in the repository: `v0.25.0`
 - Current published stable release observed: `v0.24.0`
-- GitHub tracker snapshot: 232 closed Issues, 2 open Issues; 641 closed PRs, 0 open PRs.
+- GitHub tracker snapshot: 232 closed Issues, 2 open Issues; 641 closed PRs, 1 open PR (#877, this audit/diagnostic correction).
 - The two open Issues are #652 and #654. The absence of open PRs is not evidence of release completion.
 
 ## Executive decision
@@ -27,23 +27,23 @@ The v0.25.0 exclusion manifest is intentionally empty. Its completion-only polic
 
 ## Latest exact-SHA automated checks
 
-On audited SHA `b9b5c0c097b5b64d6556029952893d0feacf87ef`:
+On current audited main SHA `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`:
 
 | Check | Latest observed result | Evidence |
 |---|---|---|
-| Container build/smoke | PASS | [CI run 42585305605](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305605) |
-| Bounded CI soak smoke | PASS | [CI run 42585305605](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305605) |
-| Fuzz smoke | PASS | [CI run 42585305605](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305605) |
-| PostgreSQL integration | PASS | [CI run 42585305605](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305605) |
-| Redis integration | PASS | [CI run 42585305605](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305605) |
-| CodeQL (Go) | PASS | [Security run 42585305552](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305552) |
-| Go vulnerability scan | PASS | [Security run 42585305552](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305552) |
-| Fresh Go coverage gate | PASS | [Coverage run 42585305683](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305683) |
-| Full verification / verify job | RUNNING at audit time | [CI run 42585305605](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305605) |
+| Container build/smoke | PASS | [CI run 42587652970](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970) |
+| Bounded CI soak smoke | PASS | [CI run 42587652970](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970) |
+| Fuzz smoke | PASS | [CI run 42587652970](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970) |
+| PostgreSQL integration | PASS | [CI run 42587652970](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970) |
+| Redis integration | PASS | [CI run 42587652970](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970) |
+| CodeQL (Go) | PASS | [Security run 42587653033](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587653033) |
+| Go vulnerability scan | PASS | [Security run 42587653033](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587653033) |
+| Fresh Go coverage gate | PASS — **43,946 / 44,269 statements = 99.2704%** | [Coverage run 42587652923](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652923) |
+| Full verification / verify job | RUNNING at audit time | [CI run 42587652970](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970) |
 
-The exact-SHA check-run API returned 10 check runs: the eight completed checks above, `verify` still running, and an `implementation` check skipped by its own workflow. The skipped implementation check is not being counted as a required pass. Because `verify` was still running, the ordinary exact-SHA gate was not PASS at audit time.
+The exact-SHA check-run API returned 11 checks: six completed CI checks above plus `verify` still running, two successful Security checks, one successful Coverage check, and an `implementation` check skipped by its own workflow. The skipped implementation check is not counted as a required pass. Because `verify` was still running, the ordinary exact-SHA gate was not PASS at audit time.
 
-A bounded CI soak smoke is not the release's sustained two-hour soak. The last recorded two-hour soak and coverage evidence is on SHA `56c7ddfdcdb4869562d4b53187354d0033f688f0`, not the audited SHA. It must be rerun on the frozen final candidate.
+The current main SHA is two documentation-only commits ahead of the inspected application baseline `b9b5c0c`; PR #876 adds a dated audit report. The Doctor correction and current documentation reconciliation are in PR #877, not yet merged into main. A bounded CI soak smoke is not the release's sustained two-hour soak. The last recorded two-hour soak evidence remains on SHA `56c7ddfdcdb4869562d4b53187354d0033f688f0` and must be rerun on the frozen final candidate.
 
 ## Issue-by-issue acceptance reconciliation
 
@@ -57,7 +57,7 @@ This table distinguishes GitHub state from actual acceptance evidence. A closed 
 | [#649 — Vault Transit](https://github.com/ali-shortcuts/nexaroute/issues/649) | CLOSED / completed | Real Vault API and operator-lab evidence exists: local-loopback 50/50 and a single-host, three-node Raft exercise on ancestor SHA `debbe202cd5895e275528fe7c162f7b2969c29f7`. The issue's last disclosure disputes the closure and lists gaps in the evidence trail, including exact commands, external-verification update and an unavailable key-version test. | Reconcile the closure; complete missing Transit acceptance cases and evidence; decide whether operator-managed staging is required by the issue's original contract; bind a complete artifact and record to the final candidate. No production/HSM/KMS/HA claim follows from a single-host lab. |
 | [#650 — Kubernetes/Helm](https://github.com/ali-shortcuts/nexaroute/issues/650) | CLOSED / completed | Live disposable-`kind` acceptance run 42490453403 on SHA `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0` reports `failures=0 not_run=0`; the issue disclosure says closure authority is unresolved. | Preserve the real artifact and rerun acceptance on the final candidate SHA. Explicitly retain the boundary: disposable-kind success is not production-cluster certification or multi-host HA. |
 | [#651 — Real ComfyUI inference](https://github.com/ali-shortcuts/nexaroute/issues/651) | CLOSED / completed | A comment reports a real ComfyUI 0.44.0 / Wan 2.1 1.3B MP4 inference with SHA-256 and Gateway checks PASS. The comment says the sanitized report is in a Colab workspace; a later disclosure says it is not committed or linked as a retrievable artifact and closure authority is pending. | Commit the sanitized report (no prompts/secrets), preserve its provenance and actual output metadata, verify Gateway retrieval and negative cases, and add exact-candidate acceptance record. Treat the current evidence as operator-reported until independently reviewable. |
-| [#652 — Multi-host HA](https://github.com/ali-shortcuts/nexaroute/issues/652) | OPEN | PR #874 and merged PR #875 establish two Gateway replicas on distinct Kubernetes workers, single-Pod restart recovery, and same-instance PostgreSQL backup/restore. PostgreSQL and Redis are each one replica using `emptyDir`; Redis AOF is disabled. No cross-host database/Redis failover, durable persistence, multi-host RPO/RTO or long soak is proven. The current `doctor` command emits an outdated M4-2 warning for PostgreSQL/Redis security-store backends even though both adapters and real-service integration suites exist. This is a diagnostic false-positive, not evidence that the runtime admin-auth path fails closed; the code correction is included in the accompanying work branch. | Provision an authorized topology with durable/replicated PostgreSQL and Redis, test cold start, replica loss, both backend failures, reconnect, backup/restore, shared-state correctness and duplicate-job/ledger prevention; record measured RPO/RTO and soak. Investigate the M4-2 admin-auth warning before claiming PostgreSQL-backed HA readiness. |
+| [#652 — Multi-host HA](https://github.com/ali-shortcuts/nexaroute/issues/652) | OPEN | PR #874 and merged PR #875 establish two Gateway replicas on distinct Kubernetes workers, single-Pod restart recovery, and same-instance PostgreSQL backup/restore. PostgreSQL and Redis are each one replica using `emptyDir`; Redis AOF is disabled. No cross-host database/Redis failover, durable persistence, multi-host RPO/RTO or long soak is proven. The current `main` `doctor` command still emits an outdated M4-2 warning for PostgreSQL/Redis security-store backends even though both adapters and real-service integration suites exist. This is a diagnostic false-positive, not evidence that the runtime admin-auth path fails closed; a bounded, read-only, redacted connectivity-probe correction and regression tests are included in PR #877 and remain subject to its exact-head CI. | Provision an authorized topology with durable/replicated PostgreSQL and Redis, test cold start, replica loss, both backend failures, reconnect, backup/restore, shared-state correctness and duplicate-job/ledger prevention; record measured RPO/RTO and soak. Merge the Doctor diagnostic correction after exact-head checks pass, then separately complete cross-host durable backend failover before claiming PostgreSQL-backed HA readiness. |
 | [#653 — Coverage and soak](https://github.com/ali-shortcuts/nexaroute/issues/653) | CLOSED / completed | Coverage 99.3% and three-round/two-hour soak are recorded on SHA `56c7ddfdcdb4869562d4b53187354d0033f688f0` (run 42435913579 and 42435915263, artifact 13603355325 for soak). The issue thread says the PR merge auto-closed it despite an instruction to keep the issue open. | Rerun fresh coverage, stress and two-hour soak against the frozen final candidate SHA; validate summary and samples against the matching workflow artifact; reconcile the closure and add the exact-candidate acceptance record. |
 | [#654 — Umbrella release tracker](https://github.com/ali-shortcuts/nexaroute/issues/654) | OPEN | The body still contains an older checklist saying #646–#653 are all open and has stale blocker notes. | Refresh from this matrix; keep open until #646–#653 are genuinely completed and their records/artifacts independently reviewed; close #654 last. |
 
