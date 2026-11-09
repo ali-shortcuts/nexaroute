@@ -12,9 +12,9 @@ import (
 // Backend is the runtime-selectable contract for the admin security store:
 // admin sessions and the tamper-evident audit chain. The zero-service
 // default implementation is the local bbolt Store in this package.
-// Redis/PostgreSQL adapters (M4-2) must satisfy this same interface and
-// pass the shared contract suite in backend_contract_test.go against the
-// real services before they may be selected in a release build.
+// PostgreSQL and Redis adapters satisfy this interface. Their tagged
+// integration suites run the shared contract, cross-backend parity,
+// concurrent-writer and persistence checks against real services.
 //
 // State classification: only sessions and audit records live behind this
 // interface. Rate-limit buckets, provider health, caches and in-flight
