@@ -1,0 +1,67 @@
+# Disposable two-node acceptance profile for issue #652.
+#
+# This file contains no credentials. Create the referenced Secrets with
+# kubectl from operator-provided environment variables; see
+# deploy/killercoda/README.md. Do not use this profile for production.
+replicaCount: 2
+
+image:
+  repository: ghcr.io/ali-shortcuts/nexaroute
+  tag: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+# Two replicas must be allowed to overlap during a rolling replacement.
+# The default chart remains Recreate because its normal state volume is RWO.
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 1
+
+# Each replica keeps only disposable local state (not shared assets/config).
+# Shared control-plane, security, video jobs and ledger state must be backed
+# by the external PostgreSQL backend selected in the supplied config Secret.
+persistence:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 384Mi
+
+terminationGracePeriodSeconds: 60
+
+config:
+  existingSecret: nexaroute-killercoda-config
+  configJSON: "{}"
+
+controlPlane:
+  postgresDSN:
+    secretName: nexaroute-killercoda-pg
+    secretKey: dsn
+  redisURL:
+    secretName: nexaroute-killercoda-redis
+    secretKey: url
+
+# Keep replicas on distinct Kubernetes nodes when the playground scheduler
+# has two nodes available. If only one node is available, the workload stays
+# Pending rather than silently becoming a same-node acceptance run.
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: nexaroute
+        topologyKey: kubernetes.io/hostname
+
+acceptanceStubSidecar:
+  enabled: false
+
+extraEnv: []

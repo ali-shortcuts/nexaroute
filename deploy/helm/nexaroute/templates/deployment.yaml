@@ -9,7 +9,7 @@ spec:
   # State is on a ReadWriteOnce volume (and per-replica bbolt stores);
   # never run two pods against one claim during an upgrade.
   strategy:
-    type: Recreate
+    {{- toYaml .Values.strategy | nindent 4 }}
   selector:
     matchLabels:
       {{- include "nexaroute.selectorLabels" . | nindent 6 }}

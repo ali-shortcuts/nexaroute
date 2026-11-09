@@ -104,6 +104,7 @@ cd "$REPO"
 mkdir -p "$OUT_DIR"
 CHART="deploy/helm/nexaroute"
 ACCEPT_VALUES="$CHART/values-acceptance.yaml"
+HA_VALUES="$CHART/values-killercoda-ha.yaml"
 ACCEPT_CONFIG="$CHART/acceptance-config.json"
 STUB_MANIFEST="$CHART/acceptance-stub.yaml"
 
@@ -209,6 +210,7 @@ offline_phase() {
 
   helm template "$RELEASE" "$CHART" -f "$ACCEPT_VALUES" > "$OUT_DIR/rendered-acceptance.yaml"
   helm template "$RELEASE" "$CHART" > "$OUT_DIR/rendered-default.yaml"
+  helm template "$RELEASE-ha" "$CHART" -f "$HA_VALUES" > "$OUT_DIR/rendered-killercoda-ha.yaml"
   ok "helm template (acceptance values and chart defaults)"
 
   for rendered in "$OUT_DIR/rendered-acceptance.yaml" "$OUT_DIR/rendered-default.yaml"; do
@@ -240,6 +242,17 @@ offline_phase() {
   assert_rendered "$OUT_DIR/rendered-acceptance.yaml" 'name: acceptance-stub' "acceptance stub sidecar rendered (acceptance only)"
   assert_rendered_absent "$OUT_DIR/rendered-default.yaml" 'name: acceptance-stub' "no acceptance stub sidecar in default render"
   assert_rendered_absent "$OUT_DIR/rendered-default.yaml" 'acceptance-stub-code' "no acceptance stub volume in default render"
+
+  section "offline assertions on rendered-killercoda-ha.yaml"
+  local ha_rendered="$OUT_DIR/rendered-killercoda-ha.yaml"
+  assert_rendered "$ha_rendered" 'replicas: 2' "Killercoda profile has two gateway replicas"
+  assert_rendered "$ha_rendered" 'type: RollingUpdate' "Killercoda profile permits overlapping replicas"
+  assert_rendered "$ha_rendered" 'requiredDuringSchedulingIgnoredDuringExecution:' "Killercoda profile requires node separation"
+  assert_rendered "$ha_rendered" 'topologyKey: kubernetes.io/hostname' "Killercoda profile separates by node hostname"
+  assert_rendered "$ha_rendered" 'name: nexaroute-killercoda-pg' "Killercoda profile references the operator PG Secret"
+  assert_rendered_absent "$ha_rendered" 'kind: PersistentVolumeClaim' "Killercoda profile does not share an RWO PVC"
+  assert_rendered_absent "$ha_rendered" 'value: (postgres|rediss?)://' "no plaintext database URL in Killercoda manifests"
+  leak_check "Killercoda HA rendered manifest" "$ha_rendered"
 
   # Secret-reference wiring on the acceptance render.
   assert_rendered "$OUT_DIR/rendered-acceptance.yaml" 'secretKeyRef:' "control-plane / stub credentials arrive via secretKeyRef only"
