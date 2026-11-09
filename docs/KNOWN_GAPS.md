@@ -58,7 +58,7 @@ Implemented:
 Boundaries:
 
 - OS keyring and external command/KMS custody adapters are implemented behind `NEXAROUTE_KEY_PROVIDER`; service interoperability and deployment-specific KMS semantics remain unverified
-- Vault Transit `nxs2` is implemented and covered by deterministic fake-API tests, but **no real Vault Transit acceptance run has been executed**. Do not claim production HSM/KMS isolation, HA failover behavior, token renewal, or real Vault compatibility until that run is recorded in `docs/EXTERNAL_VERIFICATION.md`
+- Vault Transit `nxs2` is implemented and covered by deterministic fake-API tests. Real Vault API acceptance has also been reported as PASS in two bounded non-production scopes: local-loopback on code SHA `35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1` (50/50 checks), and a single-host three-node Raft operator lab on ancestor SHA `debbe202cd5895e275528fe7c162f7b2969c29f7`. These do not establish managed staging, multi-host failure independence, production readiness, HSM/KMS isolation or token-renewal behavior. The operator-lab issue disclosure still identifies evidence-trail gaps; see `docs/reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md` before making a release claim.
 - Transit mode requires Vault availability for decrypt; an outage or denied policy fails closed and there is no local-key fallback. Disabling a historical Transit key version before `secrets rewrap-transit` and verification succeeds can make affected secrets unrecoverable
 - externally managed rotation is intentionally performed by the custody system; `nexaroute secrets rotate` refuses to rewrite an external provider and retains only the most recent `.key.previous` file for the local provider
 
@@ -153,13 +153,17 @@ with an operator's configured model (CI uses a scripted planner).
 
 No commercial external video provider adapter is bundled. The opt-in local
 ComfyUI adapter supports text-to-video through a user-supplied API-format
-workflow; its HTTP contract is covered by fixtures, but actual model inference
-on a real ComfyUI installation is not part of CI. The opt-in
-`nexaroute comfyui-accept --confirm-live` command automates the real check
-(server stats, one minimal job, read-back SHA-256/size/metadata, `ffprobe`
-playability, bounded cleanup), but its current status is NOT_RUN/BLOCKED until
-an operator supplies a provisioned installation and records the sanitized
-report; loopback fixtures are not real inference. The fake provider writes a
+workflow; its HTTP contract is covered by fixtures, and actual model
+inference is not part of CI. The opt-in `nexaroute comfyui-accept --confirm-live`
+command automates the real check (server stats, one minimal job, read-back
+SHA-256/size/metadata, `ffprobe` playability, bounded cleanup). An operator
+comment on Issue #651 reports a real ComfyUI 0.44.0 / Wan 2.1 1.3B inference
+and a playable MP4 with a recorded SHA-256, but the sanitized report was said
+to remain in a Colab workspace and a later disclosure notes it is not yet
+committed as a reviewable repository artifact. Treat that report as
+operator-reported, not independently verified release evidence, until the
+artifact and provenance are retained in the repository. Loopback fixtures
+are not real inference. The fake provider writes a
 text placeholder, not a playable video. The asset-size cap is enforced with streaming-memory protection: the ComfyUI adapter reads downloads through `io.LimitReader` bounded at `maxOutputBytes+1`, so an oversized response cannot OOM the gateway before the cap applies. Multi-shot jobs persist per-shot checkpoints and automatically compose generated shot assets into a final silent MP4; Gateway-side Piper narration and estimated same-language SRT captions are supported for configured multi-shot jobs. With the default file backend the video jobs, local JSON job store, queue and cost ledger remain single-process; with `video.job_store_backend=postgres` the job store and cost ledger are durable and shared with exactly-once settlement, while assets stay per-instance local — so end-to-end multi-node video is still not a declared topology (ADR 0004, Accepted — Option B): provider-native idempotent recovery after an ambiguous submission, and verified production workloads for ten-minute episodes remain unimplemented or UNVERIFIED. Provider-generated
 dialogue/sound effects/music, translated or word-aligned subtitles, and distributed
 asset/job storage remain unimplemented; the local CLI also supports existing
