@@ -76,7 +76,7 @@ No credentials, key material, customer prompts or private outputs should be comm
 
 ## Repository-owned work that remains
 
-1. Correct stale release-facing status in `docs/RELEASE_BLOCKERS.md`, `docs/EXTERNAL_VERIFICATION.md`, `docs/KNOWN_GAPS.md` and Issue #654 so that each status links to the current evidence and preserves historical boundaries.
+1. Keep release-facing status aligned across `README.md`, `docs/RELEASE_BLOCKERS.md`, `docs/EXTERNAL_VERIFICATION.md`, `docs/KNOWN_GAPS.md`, the v0.25.0 draft and Issue #654. PR #877 updates these references and replaces the stale umbrella checklist with a dated current matrix while preserving the original history.
 2. Add a committed, sanitized ComfyUI evidence report and provenance link, or rerun the inference if the Colab evidence cannot be exported safely.
 3. Correct the `doctor` security-store diagnostic so PostgreSQL/Redis selections are pinged read-only with bounded timeouts and redacted errors; keep the separate crash/backup/HA acceptance boundary explicit.
 4. Harden and validate the two-host HA harness and run all possible offline/self-test cases; do not label same-host drills as multi-host.
@@ -95,8 +95,8 @@ Do not close or reopen an Issue simply to make the dashboard green. Reconcile pr
 - [Strict release gate](../RELEASE_GATE.md)
 - [External verification runbook](../EXTERNAL_VERIFICATION.md)
 - [Known product boundaries](../KNOWN_GAPS.md)
-- [Latest main CI](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305605)
-- [Latest main Security](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305552)
-- [Latest main Coverage](https://github.com/ali-shortcuts/nexaroute/actions/runs/42585305683)
+- [Latest main CI](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970)
+- [Latest main Security](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587653033)
+- [Latest main Coverage](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652923)
 - [PR #874 — two-worker HA profile](https://github.com/ali-shortcuts/nexaroute/pull/874)
 - [PR #875 — backend recovery evidence](https://github.com/ali-shortcuts/nexaroute/pull/875)
