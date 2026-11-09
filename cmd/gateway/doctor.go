@@ -119,15 +119,45 @@ var doctorAuditContext = func() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 15*time.Second)
 }
 
+// doctorSecurityStorePostgresPing and doctorSecurityStoreRedisPing are
+// narrow connectivity probes. Doctor must not open the writable Backend:
+// OpenBackend performs migrations and would make a read-only diagnostic
+// command mutate the configured security store. Contract and audit-chain
+// correctness are covered by the backend integration suites.
+var doctorSecurityStorePostgresPing = func(ctx context.Context, dsn string) error {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = db.Close() }()
+	return db.PingContext(ctx)
+}
+
+var doctorSecurityStoreRedisPing = func(ctx context.Context, rawURL string) error {
+	opts, err := redis.ParseURL(rawURL)
+	if err != nil {
+		return err
+	}
+	client := redis.NewClient(opts)
+	defer func() { _ = client.Close() }()
+	return client.Ping(ctx).Err()
+}
+
 func (d *doctor) checkSecurityStore(configPath string) {
 	if d.cfg == nil {
 		d.report("WARN", "security_store", "skipped (config did not load)")
 		return
 	}
-	switch d.cfg.Admin.SecurityStoreBackend {
+	switch strings.ToLower(strings.TrimSpace(d.cfg.Admin.SecurityStoreBackend)) {
 	case "", "bbolt":
+	case securitystore.BackendPostgres:
+		d.checkSecurityStoreExternal(securitystore.BackendPostgres, d.cfg.Admin.SecurityStoreURL, doctorSecurityStorePostgresPing)
+		return
+	case securitystore.BackendRedis:
+		d.checkSecurityStoreExternal(securitystore.BackendRedis, d.cfg.Admin.SecurityStoreURL, doctorSecurityStoreRedisPing)
+		return
 	default:
-		d.report("WARN", "security_store", fmt.Sprintf("backend %q adapters land with M4-2; admin authentication fails closed in this build", d.cfg.Admin.SecurityStoreBackend))
+		d.report("FAIL", "security_store", fmt.Sprintf("unknown backend %q", d.cfg.Admin.SecurityStoreBackend))
 		return
 	}
 	path, err := resolveSecurityStorePath(d.cfg.Admin.SecurityStorePath, configPath)
@@ -229,6 +259,38 @@ func (d *doctor) checkControlPlane(configPath string) {
 	default:
 		d.report("FAIL", "control_plane", fmt.Sprintf("unknown backend %q", cp.Backend))
 	}
+}
+
+// checkSecurityStoreExternal resolves the backend URL and performs a
+// bounded read-only connectivity probe. It never prints the URL or the
+// connection error because either may contain credentials.
+func (d *doctor) checkSecurityStoreExternal(backend, configuredURL string, ping func(context.Context, string) error) {
+	value := strings.TrimSpace(configuredURL)
+	source := "configured URL"
+	if envName, ok := strings.CutPrefix(value, "env:"); ok {
+		envName = strings.TrimSpace(envName)
+		if envName == "" {
+			d.report("FAIL", "security_store", "security_store_url has an empty environment-variable reference")
+			return
+		}
+		value = os.Getenv(envName)
+		source = "environment variable " + envName
+		if strings.TrimSpace(value) == "" {
+			d.report("FAIL", "security_store", fmt.Sprintf("environment variable %s named by security_store_url is not set or is empty", envName))
+			return
+		}
+	}
+	if value == "" {
+		d.report("FAIL", "security_store", "security_store_url is not configured for the selected backend")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ping(ctx, value); err != nil {
+		d.report("FAIL", "security_store", fmt.Sprintf("backend %q is unreachable via %s (check network, credentials and service health)", backend, source))
+		return
+	}
+	d.report("PASS", "security_store", fmt.Sprintf("backend %q is reachable via %s", backend, source))
 }
 
 // checkExternal pings an external dependency using only the env var
