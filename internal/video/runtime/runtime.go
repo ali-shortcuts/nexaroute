@@ -348,11 +348,9 @@ func (r *Runtime) Start(ctx context.Context) error {
 	// Ready and Done can be closed at the same time, so relying on select
 	// alone makes the outcome random and can let a canceled Gateway start.
 	stopWorkers := func() {
-		workerCancel()
-		if r.Queue != nil {
-			r.Queue.Close()
-		}
-		<-workerDone
+		// Close performs the same cancellation/queue shutdown and also
+		// releases the ledger opened by New when startup cannot complete.
+		r.Close()
 	}
 	if err := workerCtx.Err(); err != nil {
 		stopWorkers()
