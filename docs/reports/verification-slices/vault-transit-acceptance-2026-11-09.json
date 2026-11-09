@@ -1,0 +1,237 @@
+{
+  "schema": "nexaroute.vault-runner-acceptance.v1",
+  "evidence_class": "local-loopback",
+  "outcome": "PASS",
+  "exit_code": 0,
+  "revision": {
+    "git_sha": "35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1",
+    "worktree_clean": true
+  },
+  "vault": {
+    "version": "1.18.5",
+    "storage_type": "file",
+    "ha_enabled": false,
+    "runtime": "local-process",
+    "topology": "single-node local Vault process on the same host",
+    "image": null,
+    "address": "http://127.0.0.1 (loopback, http allowed for loopback only)"
+  },
+  "issues": [
+    "648",
+    "649"
+  ],
+  "totals": {
+    "checks": 50,
+    "passed": 50,
+    "failed": 0
+  },
+  "checks": [
+    {
+      "id": "gateway.build",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.boot",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.init",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.unseal",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.mount_kv",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.mount_transit",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.mount_version",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.policy_accept",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.policy_transit",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.policy_rotate",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.policy_transit-config",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.transit_key",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.transit_key_readback",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.tokens",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.root_revoke",
+      "status": "PASS"
+    },
+    {
+      "id": "vault.token_survives_root_revoke",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.vault_accept",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.gateway_put_get",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.gateway_boot",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.gateway_status",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.gateway_verify",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.gateway_wrong_token",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.rotation_old_fails",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.rotation_recovery",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.vault_down_fails",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.vault_restart_unseal",
+      "status": "PASS"
+    },
+    {
+      "id": "kv.gateway_verify_restart",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.legacy_key",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.status_nxs1",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.migrate_dry_run",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.migrate",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.status_nxs2",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.verify",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.gateway_boot",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.invalid_ciphertext",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.tamper_fails",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.wrong_token",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.key_rotate",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.key_rotate_readback",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.key_version_baseline",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.key_version_unavailable",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.key_version_restore",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.rewrap_dry_run",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.rewrap",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.status_rewrapped",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.verify_rewrapped",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.rollback_backup",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.verify_after_rollback",
+      "status": "PASS"
+    },
+    {
+      "id": "transit.unavailable_fails",
+      "status": "PASS"
+    },
+    {
+      "id": "hygiene.leak_scan",
+      "status": "PASS"
+    }
+  ],
+  "limitations": [
+    "This run used a disposable local Vault process over loopback HTTP. It is NOT a staging Vault.",
+    "HA failover was NOT tested: the Vault was single-node, and a process/container stop/start + unseal is not a multi-node failover event.",
+    "Long-running token renewal, AppRole/Kubernetes auth, HSM/KMS backing, and multi-host topology were NOT tested.",
+    "The KV gateway boot and the Transit migration used a dummy provider key (acceptance-plaintext), never a real provider credential.",
+    "No token, key, ciphertext, or wrapped DEK is included in any report."
+  ]
+}

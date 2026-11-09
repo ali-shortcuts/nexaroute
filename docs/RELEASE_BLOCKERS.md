@@ -4,11 +4,11 @@ This page exists so nobody has to rediscover the answer. It states the current
 blocking state, classifies every blocker by what kind of action can clear it,
 and gives the literal command that produces the missing evidence.
 
-Last updated: 2026-11-08, against `main` `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0` (PR #869 merged). The older 2026-11-01 snapshot is superseded by the exact-main CI, Security, Coverage and Kubernetes evidence below. Every result remains bound to its named SHA.
+Last updated: 2026-11-09, candidate branch based on exact `origin/main` `66a2fabe1e32a1d98403aa6d13797d9a584fd4d3`. The new local Vault Transit run is bound to candidate code SHA `35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1`; historical GitHub results below remain tied to their own SHAs. This candidate update does not assert that those historical checks are current on the newer base.
 
 ## 1. What is *not* the problem
 
-The following required checks passed on exact current main `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0`: [CI run 42490427984](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490427984), [Security run 42490428266](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490428266), and [Coverage run 42490428148](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490428148). These checks do not establish product completeness:
+Historical required-check results below were recorded on SHA `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0`; they are not asserted current on base SHA `66a2fabe1e32a1d98403aa6d13797d9a584fd4d3`. Separately, `./scripts/verify.sh` passed locally on candidate code SHA `35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1` (unit/integration, vet, race, browser, fuzz and amd64/arm64 builds); this is not GitHub Actions evidence. These checks do not establish product completeness:
 
 | Check (required by ruleset `main-required-checks`, 9 contexts) | Result |
 |---|---|
@@ -57,7 +57,7 @@ These cannot be satisfied by any amount of code or permission:
 | Issue | What is missing | Who can supply it |
 |---|---|---|
 | #647 | Complete interactive OIDC login and the remaining mapped/unmapped-user, logout, audit and provider-key-rotation observations against the approved test tenant | Operator |
-| #649 | Operator-managed Vault Transit acceptance for the remaining key-version, invalid-ciphertext and Gateway Transit-mode cases | Operator |
+| #649 | Operator-managed staging acceptance beyond the actual Vault 1.18.5 local-loopback PASS; environment-specific staging policy/topology and production operations remain unverified | Operator |
 | #651 | A provisioned ComfyUI server, compatible real text-to-video model and workflow for an actual inference | Operator |
 | #652 | Two independent hosts sharing PostgreSQL + Redis, behind one address, plus an authorized backup/restore drill | Operator |
 
@@ -124,14 +124,16 @@ organizational tenant, registered callback and mapped/unmapped accounts, then
 exercise the issue's PKCE, JWKS rotation, roles, logout, clock-skew and audit
 criteria against that tenant. The runner-local workflow cannot do this.
 
-For #648/#649, the Vault operator must provision an authorized staging Vault,
-least-privilege KV and Transit policies and separate test keys, inject secrets
-through the approved secret channel, run the documented live harness, and
-coordinate rotation, revocation, outage, rewrap and rollback. See
-[Vault KV acceptance](reports/verification-slices/vault-kv-acceptance.md)
-and [external verification](EXTERNAL_VERIFICATION.md). Never upload tokens,
-key bytes or unredacted configuration. The runner-loopback workflow does not
-satisfy staging or HA requirements.
+For #648/#649, the Vault operator must still provision an authorized staging
+Vault, least-privilege KV and Transit policies and separate test keys, inject
+secrets through the approved secret channel, and coordinate the environment-
+specific acceptance. The actual Vault 1.18.5 local-loopback Transit run covers
+migration, Gateway startup, invalid ciphertext, an unavailable key version,
+rotation, rewrap and rollback; see the [retained #649 report](reports/verification-slices/vault-transit-acceptance-2026-11-09.md)
+and [JSON summary](reports/verification-slices/vault-transit-acceptance-2026-11-09.json).
+The KV procedure remains in [Vault KV acceptance](reports/verification-slices/vault-kv-acceptance.md).
+Never upload tokens, key bytes or unredacted configuration. Local or runner-
+loopback evidence does not satisfy staging, HA, production, HSM or KMS claims.
 
 For #651, provision an authorized real ComfyUI model and workflow, run the
 [real-inference procedure](reports/verification-slices/comfyui-real-inference-acceptance.md),
