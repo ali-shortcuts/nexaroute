@@ -704,14 +704,14 @@ func TestDoctorControlPlaneMatrix(t *testing.T) {
 	if got := run(t, cfg); !strings.Contains(got, "PASS control_plane: memory backend") {
 		t.Fatalf("memory backend:\n%s", got)
 	}
-	// Non-bbolt security store backend → WARN (adapters land later).
-	cfg = writeCfg(t, `{"enabled":false}`)
-	_ = cfg
+	// Shared PostgreSQL security store backend → real connectivity probe;
+	// an unreachable dependency must fail closed, not emit the obsolete
+	// M4-2 warning or claim that the adapter is unimplemented.
 	withStore := filepath.Join(t.TempDir(), "s.json")
-	if err := os.WriteFile(withStore, []byte(`{"listen":"127.0.0.1:9","admin":{"security_store_backend":"postgres","security_store_url":"postgres://127.0.0.1:1/db"}}`), 0600); err != nil {
+	if err := os.WriteFile(withStore, []byte(`{"listen":"127.0.0.1:9","admin":{"security_store_backend":"postgres","security_store_url":"postgres://127.0.0.1:1/db?sslmode=disable"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if got := run(t, withStore); !strings.Contains(got, "WARN security_store: backend") {
+	if got := run(t, withStore); !strings.Contains(got, `FAIL security_store: backend "postgres" is unreachable`) || strings.Contains(got, "M4-2") {
 		t.Fatalf("store backend:\n%s", got)
 	}
 	// Postgres/redis configured but unreachable → FAIL, fast and hermetic
