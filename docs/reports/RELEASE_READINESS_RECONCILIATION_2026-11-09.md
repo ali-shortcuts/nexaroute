@@ -6,12 +6,12 @@
 
 - Repository: `ali-shortcuts/nexaroute`
 - Audited branch: `main`
-- Audited main SHA: `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7` (two documentation-only commits ahead of the previously audited application baseline `b9b5c0c097b5b64d6556029952893d0feacf87ef`; PR #876 added the historical audit report).
+- Audited application-code SHA: `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7` (the audited main at snapshot time). Latest `main` is `08b8aed95f550d3068ab34bac6b29411755161c3`, a documentation-only refresh in PR #878 atop that code SHA; the preceding application baseline was `b9b5c0c097b5b64d6556029952893d0feacf87ef`.
 - Snapshot date: 2026-11-09
 - Current release target documented in the repository: `v0.25.0`
 - Current published stable release observed: `v0.24.0`
 - GitHub tracker snapshot: 232 closed Issues, 2 open Issues; 641 closed PRs, 1 open PR (#877, this audit/diagnostic correction).
-- The two open Issues are #652 and #654. The absence of open PRs is not evidence of release completion.
+- The two open Issues are #652 and #654. PR #877 is the only open PR; its presence or eventual merge is not evidence of release completion.
 
 ## Executive decision
 
@@ -27,7 +27,7 @@ The v0.25.0 exclusion manifest is intentionally empty. Its completion-only polic
 
 ## Latest exact-SHA automated checks
 
-On current audited main SHA `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`:
+On audited application-code SHA `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`:
 
 | Check | Latest observed result | Evidence |
 |---|---|---|
@@ -38,12 +38,12 @@ On current audited main SHA `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`:
 | Redis integration | PASS | [CI run 42587652970](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970) |
 | CodeQL (Go) | PASS | [Security run 42587653033](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587653033) |
 | Go vulnerability scan | PASS | [Security run 42587653033](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587653033) |
-| Fresh Go coverage gate | PASS — **43,946 / 44,269 statements = 99.2704%** | [Coverage run 42587652923](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652923) |
+| Fresh Go coverage gate | CI PASS; exact Go function count recomputed from the run artifact: **43,899 / 44,222 = 99.2696%** (the raw profile also contains 47 covered statements outside functions, which `go tool cover` ignores) | [Coverage run 42587652923 / artifact 13659449395](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652923) |
 | Full verification / verify job | RUNNING at audit time | [CI run 42587652970](https://github.com/ali-shortcuts/nexaroute/actions/runs/42587652970) |
 
 The exact-SHA check-run API returned 11 checks: six completed CI checks above plus `verify` still running, two successful Security checks, one successful Coverage check, and an `implementation` check skipped by its own workflow. The skipped implementation check is not counted as a required pass. Because `verify` was still running, the ordinary exact-SHA gate was not PASS at audit time.
 
-The current main SHA is two documentation-only commits ahead of the inspected application baseline `b9b5c0c`; PR #876 adds a dated audit report. The Doctor correction and current documentation reconciliation are in PR #877, not yet merged into main. A bounded CI soak smoke is not the release's sustained two-hour soak. The last recorded two-hour soak evidence remains on SHA `56c7ddfdcdb4869562d4b53187354d0033f688f0` and must be rerun on the frozen final candidate.
+At audit time, `15a14f92` was two documentation-only commits ahead of application baseline `b9b5c0c`; PR #876 added the audit report. Latest `main` is `08b8aed95f550d3068ab34bac6b29411755161c3`, a further documentation-only refresh in PR #878; the listed checks and acceptance records remain tied to their stated SHAs. The Doctor correction and current documentation reconciliation are in PR #877, not yet merged into main. A bounded CI soak smoke is not the release's sustained two-hour soak. The last recorded two-hour soak evidence remains on SHA `56c7ddfdcdb4869562d4b53187354d0033f688f0` and must be rerun on the frozen final candidate.
 
 ## Issue-by-issue acceptance reconciliation
 

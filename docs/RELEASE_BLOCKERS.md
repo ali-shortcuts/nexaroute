@@ -1,16 +1,27 @@
 # Why the v0.25.0 release is blocked, and exactly what unblocks it
 
-> **Current source of truth (2026-11-09):** read [the current release-readiness reconciliation](reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md) first. This file retains detailed operator procedures and historical SHA-bound evidence; older status snapshots in the sections below are not current-main acceptance claims. The reconciliation's original application-code baseline was `b9b5c0c097b5b64d6556029952893d0feacf87ef`; current `main` is `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7` (PR #876 added a documentation-only audit report).
+> **Current source of truth (2026-11-09):** read [the current release-readiness reconciliation](reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md) first. This file retains detailed operator procedures and historical SHA-bound evidence; older status snapshots in the sections below are not current-main acceptance claims. The original application-code baseline was `b9b5c0c097b5b64d6556029952893d0feacf87ef`; latest `main` is `08b8aed95f550d3068ab34bac6b29411755161c3` (documentation-only PR #878 on top of tested code SHA `15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`).
 
 This page exists so nobody has to rediscover the answer. It states the current
 blocking state, classifies every blocker by what kind of action can clear it,
 and gives the literal command that produces the missing evidence.
 
-Last updated: 2026-11-09, candidate branch based on exact `origin/main` `66a2fabe1e32a1d98403aa6d13797d9a584fd4d3`. The new local Vault Transit run is bound to candidate code SHA `35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1`; historical GitHub results below remain tied to their own SHAs. This candidate update does not assert that those historical checks are current on the newer base.
+Last updated: 2026-11-09. The latest main tip observed for this refresh is
+`08b8aed95f550d3068ab34bac6b29411755161c3`; it is a documentation-only descendant of application-code SHA
+`15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`. The local Vault Transit report is
+bound to `35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1`; historical GitHub results
+below remain tied to their own SHAs. Acceptance dispatches must be checked again
+against a frozen candidate before release; this document does not transfer
+historical evidence to the latest tip.
 
 ## 1. What is *not* the problem
 
-Historical required-check results below were recorded on SHA `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0`; they are not asserted current on base SHA `66a2fabe1e32a1d98403aa6d13797d9a584fd4d3`. Separately, `./scripts/verify.sh` passed locally on candidate code SHA `35407ad0a0946de65bfcccc5ba3cd4b3779eb2d1` (unit/integration, vet, race, browser, fuzz and amd64/arm64 builds); this is not GitHub Actions evidence. These checks do not establish product completeness:
+Historical required-check results below were recorded on SHA `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0`; they are not asserted current on
+`08b8aed95f550d3068ab34bac6b29411755161c3`. Main CI, Security and Coverage passed on application-code SHA
+`15a14f92ad9fffa1beb11fcbc5b96a3b7a0158f7`; the later `08b8aed95f550d3068ab34bac6b29411755161c3` commit only
+refreshes documentation, and those results remain attributed to `15a14f92`.
+They do not establish product completeness or replace the manual acceptance
+gates below:
 
 | Check (required by ruleset `main-required-checks`, 9 contexts) | Result |
 |---|---|
@@ -22,7 +33,7 @@ Historical required-check results below were recorded on SHA `1d8ac1ba82ece8b589
 | `integration-redis` | success |
 | `Go vulnerability scan` | success |
 | `CodeQL (Go)` | success |
-| `Fresh Go coverage` (95.0% inclusive gate) | **99.29295896%** (43,956 / 44,269 statements; gate PASS) |
+| `Fresh Go coverage` (95.0% inclusive gate) | CI PASS; exact Go function count recomputed from artifact 13659449395: **43,899 / 44,222 = 99.2696%** (47 covered raw-profile statements outside functions are ignored by `go tool cover`) |
 
 The repository-owned acceptance commands already exist: `nexaroute provider-accept`,
 `nexaroute external-accept`, `nexaroute vault-accept`,
@@ -67,7 +78,10 @@ Issue-state caveats are separate from missing infrastructure: #648 is closed wit
 
 ### Class C — Kubernetes disposable-cluster acceptance now passes on current main; issue disposition is separate
 
-The earlier failure on `89b608dd` (run 41259193878) is historical and is superseded for the disposable-cluster technical acceptance by [PR #869](https://github.com/ali-shortcuts/nexaroute/pull/869), merged as current main `1d8ac1ba82ece8b589e940be3519a7bb4a9035f0`.
+The earlier failure on `89b608dd` (run 41259193878) is historical and is
+superseded for the disposable-cluster technical acceptance by [PR #869](https://github.com/ali-shortcuts/nexaroute/pull/869), merged before the
+current main line. A fresh current-candidate dispatch is still required before
+using Kubernetes evidence for the final release.
 
 The post-merge [Kubernetes live acceptance run 42490453403](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490453403) ran on that exact SHA. Its inspected [raw artifact 13621468111](https://github.com/ali-shortcuts/nexaroute/actions/runs/42490453403/artifacts/13621468111) records the upgraded release Pod Ready, the PostgreSQL-backed Gateway Ready, denial of pod-list access for the release ServiceAccount through SubjectAccessReview, and `RESULT: failures=0 not_run=0`. The job completed successfully. See [the retained acceptance report](reports/K8S_LIVE_ACCEPTANCE_2026-11-08.md).
 
