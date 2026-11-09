@@ -1,5 +1,7 @@
 # Why the v0.25.0 release is blocked, and exactly what unblocks it
 
+> **Current source of truth (2026-11-09):** read [the current release-readiness reconciliation](reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md) first. This file retains detailed operator procedures and historical SHA-bound evidence; older status snapshots in the sections below are not current-main acceptance claims. The audited main SHA for the reconciliation is `b9b5c0c097b5b64d6556029952893d0feacf87ef`.
+
 This page exists so nobody has to rediscover the answer. It states the current
 blocking state, classifies every blocker by what kind of action can clear it,
 and gives the literal command that produces the missing evidence.

@@ -24,9 +24,9 @@ func contractStorePath(t *testing.T, name string) string {
 }
 
 // runBackendContract exercises the full Backend contract against any
-// implementation. M4-2 adapters (Redis/PostgreSQL) must run this same
-// suite against the real services (opt-in) before they may be selected;
-// here it runs against the default bbolt store. The suite is behavioral:
+// implementation. The PostgreSQL and Redis integration suites call this
+// same contract against real services under the integration build tag;
+// the ordinary unit suite runs it against the default bbolt store. The suite is behavioral:
 // session lifecycle, audit append/read ordering, chain verification, and
 // fail-closed handling of malformed inputs.
 func runBackendContract(t *testing.T, open func(t *testing.T) Backend) {

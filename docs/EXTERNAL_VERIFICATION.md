@@ -1,5 +1,7 @@
 # External verification runbook (M4-7)
 
+> **Current status snapshot:** this runbook contains historical acceptance entries and is not, by itself, a current release verdict. For the latest Issue states, exact evidence classes, current-main checks, missing artifacts and v0.25.0 requirements, use [the 2026-11-09 release-readiness reconciliation](reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md). In particular, older `NOT_RUN` statements below may be superseded by later operator reports, while a later GitHub Issue closure does not automatically prove acceptance. Preserve the explicit distinction between local/loopback, single-host, staging, multi-host and production evidence.
+
 Three NexaRoute integrations depend on external systems that the
 project's own CI cannot provide: an OIDC identity provider, HashiCorp
 Vault, and an OS keyring. The implementations are covered by

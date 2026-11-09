@@ -35,10 +35,10 @@ func doctorConfigWithSecurity(t *testing.T, backend, storePath string) (*config.
 	return &cfg, cfgPath
 }
 
-// checkSecurityStore: nil config → WARN skip; non-bbolt backend →
-// WARN; absent file → WARN; unreadable path component → FAIL;
-// corrupt db → FAIL; slack permissions → WARN; valid db → PASS with
-// verified chain.
+// checkSecurityStore: nil config → WARN skip; external backends are
+// pinged without disclosing their URLs; absent file → WARN; unreadable
+// path component → FAIL; corrupt db → FAIL; slack permissions → WARN;
+// valid bbolt db → PASS with verified chain.
 func TestDoctorCheckSecurityStoreBranches(t *testing.T) {
 	newDoctor := func(cfg *config.Config) (*doctor, *bytes.Buffer) {
 		var w bytes.Buffer
@@ -51,17 +51,61 @@ func TestDoctorCheckSecurityStoreBranches(t *testing.T) {
 			t.Fatalf("%s", w.String())
 		}
 	})
-	t.Run("non-bbolt backend warns", func(t *testing.T) {
+	t.Run("postgres env URL is pinged without disclosure", func(t *testing.T) {
 		cfg := config.Default()
-		cfg.Admin.SecurityStoreBackend = "postgres"
-		cfg.Admin.SecurityStoreURL = "postgres://localhost/x"
-		cfgPath := filepath.Join(t.TempDir(), "config.json")
-		if err := config.SaveAtomic(cfgPath, cfg); err != nil {
-			t.Fatal(err)
+		cfg.Admin.SecurityStoreBackend = securitystore.BackendPostgres
+		cfg.Admin.SecurityStoreURL = "env:NEXAROUTE_DOCTOR_TEST_SECURITY_DSN"
+		const dsn = "postgres://doctor-user:private-password@db.example.invalid/nexaroute"
+		t.Setenv("NEXAROUTE_DOCTOR_TEST_SECURITY_DSN", dsn)
+		oldPing := doctorSecurityStorePostgresPing
+		doctorSecurityStorePostgresPing = func(ctx context.Context, got string) error {
+			if got != dsn {
+				t.Fatalf("ping DSN = %q, want configured environment value", got)
+			}
+			if _, ok := ctx.Deadline(); !ok {
+				t.Fatal("postgres probe must have a deadline")
+			}
+			return nil
 		}
+		t.Cleanup(func() { doctorSecurityStorePostgresPing = oldPing })
 		d, w := newDoctor(&cfg)
-		d.checkSecurityStore(cfgPath)
-		if d.warns != 1 || !strings.Contains(w.String(), "M4-2") {
+		d.checkSecurityStore("unused")
+		if d.passes != 1 || d.fails != 0 || !strings.Contains(w.String(), "PASS security_store: backend \"postgres\" is reachable") {
+			t.Fatalf("%s", w.String())
+		}
+		if strings.Contains(w.String(), "private-password") || strings.Contains(w.String(), "db.example.invalid") {
+			t.Fatalf("connection details leaked: %s", w.String())
+		}
+	})
+	t.Run("redis URL errors are redacted", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Admin.SecurityStoreBackend = securitystore.BackendRedis
+		cfg.Admin.SecurityStoreURL = "redis://:private-password@redis.example.invalid:6379/15"
+		oldPing := doctorSecurityStoreRedisPing
+		doctorSecurityStoreRedisPing = func(ctx context.Context, got string) error {
+			if !strings.Contains(got, "private-password") {
+				t.Fatalf("redis URL was not passed to the probe")
+			}
+			return errors.New("server error includes private-password")
+		}
+		t.Cleanup(func() { doctorSecurityStoreRedisPing = oldPing })
+		d, w := newDoctor(&cfg)
+		d.checkSecurityStore("unused")
+		if d.fails != 1 || !strings.Contains(w.String(), "FAIL security_store:") {
+			t.Fatalf("%s", w.String())
+		}
+		if strings.Contains(w.String(), "private-password") || strings.Contains(w.String(), "redis.example.invalid") || strings.Contains(w.String(), "server error") {
+			t.Fatalf("connection details leaked: %s", w.String())
+		}
+	})
+	t.Run("missing env URL fails closed", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.Admin.SecurityStoreBackend = securitystore.BackendPostgres
+		cfg.Admin.SecurityStoreURL = "env:NEXAROUTE_DOCTOR_MISSING_DSN"
+		t.Setenv("NEXAROUTE_DOCTOR_MISSING_DSN", "")
+		d, w := newDoctor(&cfg)
+		d.checkSecurityStore("unused")
+		if d.fails != 1 || !strings.Contains(w.String(), "NEXAROUTE_DOCTOR_MISSING_DSN") {
 			t.Fatalf("%s", w.String())
 		}
 	})
