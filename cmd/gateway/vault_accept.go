@@ -211,7 +211,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 			HelperTimeoutSeconds:  helperTimeout,
 		},
 		Limitations: []string{
-			"This harness verifies Vault KV v2 custody only. Vault Transit envelope mode is a separate provider path and is not tested by this harness.",
+			"This vault-accept subcommand reports Vault KV v2 custody only. The enclosing runner records any Transit checks separately; this KV report does not establish Transit acceptance.",
 			"Real Vault HA failover, long-running token renewal, and auth methods other than a static token are NOT exercised by this run.",
 			"This harness does not start a full gateway process; it verifies helper key load and the nxs1 decrypt path with that key.",
 			"Dev-mode Vault is never production evidence; evidence_class=dev is reported for explicit --allow-dev runs.",
@@ -225,7 +225,7 @@ func runVaultAccept(args []string, stdout, stderr io.Writer) int {
 	report.Checks = append(report.Checks, vaultAcceptNotRun("vault.ha_failover",
 		"requires an operator-controlled Vault HA cluster and a failover event; not automated by this harness"))
 	report.Checks = append(report.Checks, vaultAcceptNotRun("vault.transit",
-		"Vault Transit envelope mode is a separate provider path and is not tested by this harness; this run does not claim Transit support"))
+		"This KV-only vault-accept subcommand does not execute Transit checks; the enclosing runner may record them separately, and this sub-report makes no Transit acceptance claim"))
 
 	if addr == "" || token == "" {
 		missing := *addrEnv

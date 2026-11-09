@@ -362,6 +362,15 @@ func TestVaultAcceptFullRunPassesAndRedacts(t *testing.T) {
 			t.Errorf("%s status=%q want %q", id, got, status)
 		}
 	}
+	kvScopeReported := false
+	for _, limitation := range report.Limitations {
+		if strings.Contains(limitation, "This vault-accept subcommand reports Vault KV v2 custody only") {
+			kvScopeReported = true
+		}
+	}
+	if !kvScopeReported {
+		t.Fatal("KV report does not explain that Transit is recorded separately by the enclosing runner")
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if fake.keyB64 != "" {

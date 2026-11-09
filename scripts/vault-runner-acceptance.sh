@@ -2,13 +2,13 @@
 # NexaRoute Vault runner acceptance (#648 KV + #649 Transit).
 #
 # What this is, exactly:
-#   A disposable, single-node, non-dev Vault in a container on the
-#   SAME GitHub Actions runner that runs this script, reached over
-#   loopback HTTP. It is NOT a staging Vault, NOT an HA cluster,
-#   NOT an organizational tenant, and NOT a multi-host topology.
-#   Every report it writes says evidence_class=runner-loopback and
-#   lists those limitations, so a PASS here must never be cited as
-#   staging, HA, production, HSM, or tenant acceptance.
+#   Default mode uses a disposable, single-node, non-dev Vault container
+#   on the same GitHub Actions runner over loopback HTTP. Optional
+#   --vault-bin mode starts a local Vault process bound to 127.0.0.1.
+#   Reports distinguish runner-loopback, local-loopback, and the
+#   self-test-no-vault class. None is staging, HA, production, HSM/KMS,
+#   an organizational tenant, or a multi-host topology; never cite a PASS
+#   from these modes for those claims.
 #
 # What it runs, in order:
 #   #648 KV: vault-accept (put/get, rotation, wrong/revoked/expired
@@ -16,18 +16,19 @@
 #     Vault-held key, wrong-token boot fail-closed, KV rotation
 #     recovery, and a Vault stop/start + unseal + boot recovery.
 #   #649 Transit: migrate an nxs1 config to nxs2 with the real
-#     Transit API, verify, tamper fail-closed, wrong-token
-#     fail-closed, Vault-side key rotation + rewrap-transit,
-#     rollback to the pre-rewrap backup, and unavailable-Vault
-#     fail-closed.
+#     Transit API, verify normal Gateway startup with that config,
+#     reject invalid ciphertext and unavailable key versions, verify
+#     tamper/wrong-token fail-closed behavior, rotate + rewrap, restore
+#     the prior key-version floor, rollback to the pre-rewrap backup,
+#     and fail closed when Vault is unavailable.
 #
 # Safety:
 #   No token, key, ciphertext, or wrapped DEK is ever printed or
 #   written to a report. Tokens are created inside the run, used
 #   only from files with mode 0600 in a temporary directory, and
-#   that directory (plus the Vault container and its data) is
-#   deleted by the EXIT trap. The only files that survive are the
-#   wrong-token reports in --out-dir. Do NOT run this script with
+#   that directory (plus the Vault process/container and its data) is
+#   deleted by the EXIT trap. Only sanitized acceptance reports in
+#   --out-dir survive. Do NOT run this script with
 #   set -x, and do NOT add the temporary directory to an artifact.
 #   On GitHub Actions, created tokens are also registered with
 #   ::add-mask:: so the runner redacts them from logs.
@@ -35,6 +36,9 @@
 # Usage (from the repository root; the workflow invokes it with bash):
 #   bash scripts/vault-runner-acceptance.sh \
 #     --out-dir vault-runner-reports
+# For a locally installed Vault binary, the same disposable file-backed
+# server can run on loopback without Docker; this is labeled local-loopback:
+#   bash scripts/vault-runner-acceptance.sh --vault-bin /path/to/vault
 set -euo pipefail
 
 OUT_DIR="vault-runner-reports"
@@ -42,6 +46,19 @@ VAULT_IMAGE="hashicorp/vault:1.18.5"
 VAULT_PORT="18200"
 GATEWAY_PORT="18080"
 CONTAINER_NAME="nexaroute-vault-acceptance"
+VAULT_BIN=""
+VAULT_PID=""
+VAULT_RUNTIME="container"
+VAULT_EVIDENCE_CLASS="runner-loopback"
+REPO_SHA="$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+WORKTREE_CLEAN="unknown"
+if command -v git >/dev/null 2>&1; then
+  if [ -z "$(git status --porcelain --untracked-files=no 2>/dev/null || true)" ]; then
+    WORKTREE_CLEAN="true"
+  else
+    WORKTREE_CLEAN="false"
+  fi
+fi
 SELFTEST=0
 SELFTEST_CHILD=""
 
@@ -49,6 +66,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --out-dir) OUT_DIR="$2"; shift 2 ;;
     --vault-image) VAULT_IMAGE="$2"; shift 2 ;;
+    --vault-bin) VAULT_BIN="$2"; VAULT_RUNTIME="local-process"; VAULT_EVIDENCE_CLASS="local-loopback"; shift 2 ;;
     --vault-port) VAULT_PORT="$2"; shift 2 ;;
     --gateway-port) GATEWAY_PORT="$2"; shift 2 ;;
     --self-test) SELFTEST=1; shift ;;
@@ -60,6 +78,11 @@ while [ $# -gt 0 ]; do
     *) echo "vault-runner-acceptance: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+if [ "$SELFTEST" -eq 1 ] || [ -n "$SELFTEST_CHILD" ]; then
+  VAULT_RUNTIME="self-test"
+  VAULT_EVIDENCE_CLASS="self-test-no-vault"
+fi
 
 VAULT_ADDR="http://127.0.0.1:${VAULT_PORT}"
 # The secrets CLI subcommands read VAULT_ADDR from the environment (the
@@ -96,9 +119,10 @@ write_summary() {
     return 1
   fi
   if python3 - "$CHECKS_FILE" "$out" "$VAULT_VERSION" "$VAULT_STORAGE" \
-      "$VAULT_HA_ENABLED" "$VAULT_IMAGE" "$fallback" "$exit_code" <<'PYEOF'
+      "$VAULT_HA_ENABLED" "$VAULT_IMAGE" "$fallback" "$exit_code" \
+      "$VAULT_RUNTIME" "$VAULT_EVIDENCE_CLASS" "$REPO_SHA" "$WORKTREE_CLEAN" <<'PYEOF'
 import json, sys
-checks_path, out_path, version, storage, ha, image, fallback, exit_code = sys.argv[1:9]
+checks_path, out_path, version, storage, ha, image, fallback, exit_code, runtime, evidence_class, git_sha, worktree_clean = sys.argv[1:13]
 checks = []
 for line in open(checks_path):
     parts = line.rstrip("\n").split("\t")
@@ -110,18 +134,25 @@ failed = sum(1 for c in checks if c["status"] == "FAIL")
 outcome = "PASS" if fallback == "PASS" and failed == 0 and passed > 0 else "FAIL"
 summary = {
     "schema": "nexaroute.vault-runner-acceptance.v1",
-    "evidence_class": "runner-loopback",
+    "evidence_class": evidence_class,
     "outcome": outcome,
     "exit_code": int(exit_code),
+    "revision": {"git_sha": git_sha, "worktree_clean": {"true": True, "false": False}.get(worktree_clean)},
     "vault": {"version": version, "storage_type": storage, "ha_enabled": ha == "true",
-              "topology": "single-node container on the same GitHub Actions runner",
-              "image": image, "address": "http://127.0.0.1 (loopback, http allowed for loopback only)"},
+              "runtime": runtime,
+              "topology": ("single-node container on the same GitHub Actions runner" if runtime == "container"
+                           else "single-node local Vault process on the same host" if runtime == "local-process"
+                           else "no Vault started by deterministic self-test"),
+              "image": image if runtime == "container" else None,
+              "address": "http://127.0.0.1 (loopback, http allowed for loopback only)"},
     "issues": ["648", "649"],
     "totals": {"checks": len(checks), "passed": passed, "failed": failed},
     "checks": checks,
     "limitations": [
-        "This run used a disposable Vault container on the same runner, over loopback HTTP. It is NOT a staging Vault.",
-        "HA failover was NOT tested: the Vault was single-node, and the restart test is a container stop/start + unseal, not an HA failover event.",
+        ("This run used a disposable Vault container on the same runner, over loopback HTTP. It is NOT a staging Vault."
+         if runtime == "container" else "This run used a disposable local Vault process over loopback HTTP. It is NOT a staging Vault."
+         if runtime == "local-process" else "No Vault API was contacted; this is a deterministic self-test only."),
+        "HA failover was NOT tested: the Vault was single-node, and a process/container stop/start + unseal is not a multi-node failover event.",
         "Long-running token renewal, AppRole/Kubernetes auth, HSM/KMS backing, and multi-host topology were NOT tested.",
         "The KV gateway boot and the Transit migration used a dummy provider key (acceptance-plaintext), never a real provider credential.",
         "No token, key, ciphertext, or wrapped DEK is included in any report.",
@@ -139,8 +170,8 @@ PYEOF
   fi
   # Even if python3 is unavailable, leave a valid minimal summary so
   # the artifact upload cannot fail for "no files found".
-  printf '{"schema":"nexaroute.vault-runner-acceptance.v1","evidence_class":"runner-loopback","outcome":"FAIL","exit_code":%s,"checks":[],"limitations":["summary writer failed; see the step log"]}\n' \
-    "$exit_code" > "$out" 2>/dev/null || true
+  printf '{"schema":"nexaroute.vault-runner-acceptance.v1","evidence_class":"%s","outcome":"FAIL","exit_code":%s,"checks":[],"limitations":["summary writer failed; see the step log"]}\n' \
+    "$VAULT_EVIDENCE_CLASS" "$exit_code" > "$out" 2>/dev/null || true
   if [ -f "$out" ]; then SUMMARY_WRITTEN=1; fi
   return 0
 }
@@ -155,7 +186,13 @@ cleanup() {
     kill "$GATEWAY_PID" 2>/dev/null || true
     wait "$GATEWAY_PID" 2>/dev/null || true
   fi
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  if [ -n "${VAULT_PID:-}" ] && kill -0 "$VAULT_PID" 2>/dev/null; then
+    kill "$VAULT_PID" 2>/dev/null || true
+    wait "$VAULT_PID" 2>/dev/null || true
+  fi
+  if [ "$VAULT_RUNTIME" = "container" ]; then
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  fi
   rm -rf "$WORK"
   exit "$code"
 }
@@ -282,6 +319,15 @@ PYEOF
   else
     fail "selftest.vault_addr_exported" "VAULT_ADDR must be exported for migrate-to-transit/rewrap-transit"
   fi
+
+  if grep -Fq 'pass "transit.invalid_ciphertext"' "$script_path" \
+      && grep -Fq 'pass "transit.gateway_boot"' "$script_path" \
+      && grep -Fq 'pass "transit.key_version_unavailable"' "$script_path" \
+      && grep -Fq 'path "transit/keys/nexaroute/config" { capabilities = ["update"] }' "$script_path"; then
+    pass "selftest.transit_runner_checks_present"
+  else
+    fail "selftest.transit_runner_checks_present" "Transit invalid-ciphertext, Gateway-startup, or unavailable-version checks are missing"
+  fi
 }
 
 # Internal self-test child modes: exercise the real summary writer and
@@ -303,9 +349,15 @@ if [ "$SELFTEST" -eq 1 ]; then
   exit 0
 fi
 
-for tool in docker curl jq python3 go; do
+for tool in curl jq python3 go; do
   command -v "$tool" >/dev/null 2>&1 || fail "prereq" "required tool $tool is missing"
 done
+if [ "$VAULT_RUNTIME" = "container" ]; then
+  command -v docker >/dev/null 2>&1 || fail "prereq" "required tool docker is missing"
+else
+  VAULT_BIN="$(command -v "$VAULT_BIN" 2>/dev/null || true)"
+  [ -n "$VAULT_BIN" ] && [ -x "$VAULT_BIN" ] || fail "prereq" "--vault-bin must name an executable Vault binary"
+fi
 [ -x "$HELPER" ] || [ -f "$HELPER" ] || fail "prereq" "helper $HELPER not found"
 
 # ---------------------------------------------------------------- build
@@ -313,12 +365,43 @@ log "building gateway binary"
 go build -o "$WORK/nexaroute" ./cmd/gateway
 pass "gateway.build"
 
+start_vault() {
+  if [ "$VAULT_RUNTIME" = "local-process" ]; then
+    mkdir -p "$WORK/vault-data"
+    cat > "$WORK/vault.hcl" <<EOF
+storage "file" { path = "$WORK/vault-data" }
+listener "tcp" {
+  address = "127.0.0.1:${VAULT_PORT}"
+  tls_disable = true
+}
+disable_mlock = true
+ui = false
+EOF
+    "$VAULT_BIN" server -config="$WORK/vault.hcl" >> "$WORK/vault-server.log" 2>&1 &
+    VAULT_PID=$!
+  else
+    docker run -d --name "$CONTAINER_NAME" \
+      -p "127.0.0.1:${VAULT_PORT}:8200" \
+      -e "VAULT_LOCAL_CONFIG={\"storage\":{\"file\":{\"path\":\"/vault/data\"}},\"listener\":{\"tcp\":{\"address\":\"0.0.0.0:8200\",\"tls_disable\":true}},\"disable_mlock\":true,\"ui\":false}" \
+      "$VAULT_IMAGE" server >/dev/null
+  fi
+}
+
+stop_vault() {
+  if [ "$VAULT_RUNTIME" = "local-process" ]; then
+    if [ -n "${VAULT_PID:-}" ] && kill -0 "$VAULT_PID" 2>/dev/null; then
+      kill "$VAULT_PID" 2>/dev/null || true
+      wait "$VAULT_PID" 2>/dev/null || true
+    fi
+    VAULT_PID=""
+  else
+    docker stop "$CONTAINER_NAME" >/dev/null
+  fi
+}
+
 # ------------------------------------------------------- start Vault
-log "starting disposable non-dev Vault container ($VAULT_IMAGE)"
-docker run -d --name "$CONTAINER_NAME" \
-  -p "127.0.0.1:${VAULT_PORT}:8200" \
-  -e "VAULT_LOCAL_CONFIG={\"storage\":{\"file\":{\"path\":\"/vault/data\"}},\"listener\":{\"tcp\":{\"address\":\"0.0.0.0:8200\",\"tls_disable\":true}},\"disable_mlock\":true,\"ui\":false}" \
-  "$VAULT_IMAGE" server >/dev/null
+log "starting disposable non-dev Vault ($VAULT_RUNTIME)"
+start_vault
 for _ in $(seq 1 60); do
   if curl -s --max-time 2 "${VAULT_ADDR}/v1/sys/seal-status" >/dev/null 2>&1; then
     break
@@ -385,7 +468,11 @@ cat > "$WORK/policy-rotate.hcl" <<'EOF'
 path "transit/keys/nexaroute/rotate" { capabilities = ["update"] }
 path "transit/keys/nexaroute" { capabilities = ["read"] }
 EOF
-for policy in accept transit rotate; do
+cat > "$WORK/policy-transit-config.hcl" <<'EOF'
+path "transit/keys/nexaroute/config" { capabilities = ["update"] }
+path "transit/keys/nexaroute" { capabilities = ["read"] }
+EOF
+for policy in accept transit rotate transit-config; do
   jq -Rs '{policy: .}' "$WORK/policy-$policy.hcl" > "$WORK/policy-$policy.json"
   code="$(vault_api_status "$WORK/root.token" PUT "sys/policies/acl/nexaroute-$policy" "$WORK/policy-$policy.json")"
   require_status "vault.policy_$policy" 204 "$code" "policy nexaroute-$policy"
@@ -430,6 +517,7 @@ create_token() { # create_token <policies-csv> <out-token-file>
 create_token "nexaroute-accept" "$WORK/kv.token"
 create_token "nexaroute-transit" "$WORK/transit.token"
 create_token "nexaroute-rotate" "$WORK/rotate.token"
+create_token "nexaroute-transit-config" "$WORK/transit-config.token"
 pass "vault.tokens"
 
 # Root is no longer needed: setup is done, and the restart test unseals
@@ -566,7 +654,7 @@ pass "kv.rotation_recovery"
 stop_gateway
 
 # Vault stop/start + unseal + boot: single-node restart recovery.
-docker stop "$CONTAINER_NAME" >/dev/null
+stop_vault
 if env NEXAROUTE_KEY_PROVIDER=command NEXAROUTE_KEY_PROVIDER_COMMAND="$(pwd)/$HELPER" \
     NEXAROUTE_KEY_PROVIDER_REF="$KV_REF" VAULT_ADDR="$VAULT_ADDR" \
     VAULT_TOKEN="$(token_from_file "$WORK/kv.token")" \
@@ -574,7 +662,7 @@ if env NEXAROUTE_KEY_PROVIDER=command NEXAROUTE_KEY_PROVIDER_COMMAND="$(pwd)/$HE
   fail "kv.vault_down_fails" "secrets verify succeeded while Vault was stopped"
 fi
 pass "kv.vault_down_fails"
-docker start "$CONTAINER_NAME" >/dev/null
+start_vault
 for _ in $(seq 1 60); do
   if curl -s --max-time 2 "${VAULT_ADDR}/v1/sys/seal-status" >/dev/null 2>&1; then break; fi
   sleep 1
@@ -644,6 +732,38 @@ grep -q "verified_fields=1" "$WORK/verify-nxs2.txt" || fail "transit.verify" "ve
 pass "transit.status_nxs2"
 pass "transit.verify"
 
+# Exercise normal Gateway initialization with an nxs2 configuration.
+# `secrets verify` alone does not prove startup selects Transit and decrypts
+# the stored configuration before serving requests.
+env NEXAROUTE_KEY_PROVIDER=transit NEXAROUTE_TRANSIT_ENABLED=true \
+    NEXAROUTE_TRANSIT_MOUNT=transit NEXAROUTE_TRANSIT_KEY=nexaroute \
+    VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$(token_from_file "$WORK/transit.token")" \
+    "$WORK/nexaroute" -no-browser -config "$WORK/config.json" \
+    > "$WORK/gateway-transit.log" 2>&1 &
+GATEWAY_PID=$!
+TRANSIT_GATEWAY_OK=0
+for _ in $(seq 1 60); do
+  if curl -s --max-time 2 "http://127.0.0.1:${GATEWAY_PORT}/healthz" >/dev/null 2>&1; then
+    TRANSIT_GATEWAY_OK=1
+    break
+  fi
+  if ! kill -0 "$GATEWAY_PID" 2>/dev/null; then break; fi
+  sleep 1
+done
+[ "$TRANSIT_GATEWAY_OK" = "1" ] || fail "transit.gateway_boot" "Gateway did not reach /healthz with Transit-backed nxs2 config"
+[ ! -e "$WORK/config.json.key" ] || fail "transit.gateway_boot" "a local .key file appeared with the Transit provider"
+pass "transit.gateway_boot"
+stop_gateway
+
+# Send malformed version-1 ciphertext directly to Vault's Transit decrypt
+# API. Unavailable key-version behavior is tested separately below. The body
+# remains private under WORK and is not copied into reports.
+printf '{"ciphertext":"vault:v1:not-valid-base64!"}' > "$WORK/invalid-ciphertext.json"
+code="$(vault_api_status "$WORK/transit.token" POST transit/decrypt/nexaroute \
+  "$WORK/invalid-ciphertext.json" "$WORK/invalid-ciphertext-response.json")"
+require_status "transit.invalid_ciphertext" 400 "$code" "transit/decrypt rejects malformed ciphertext"
+pass "transit.invalid_ciphertext"
+
 # Tamper: flip one character inside the nxs2 envelope; verify must fail.
 cp "$WORK/config.json" "$WORK/config-tampered.json"
 python3 - "$WORK/config-tampered.json" <<'PYEOF'
@@ -680,6 +800,39 @@ require_status "transit.key_rotate_readback" 200 "$code" "transit/keys/nexaroute
 [ "$(json_field "$WORK/rotate-readback.json" '.data.latest_version')" = "2" ] \
   || fail "transit.key_rotate_readback" "latest_version is not 2 after rotate"
 pass "transit.key_rotate_readback"
+
+# The migrated config still refers to Transit key version 1. Make only that
+# version unavailable for this disposable key, assert fail-closed behavior,
+# and restore the original decrypt floor before rewrap/rollback checks.
+"$WORK/nexaroute" secrets verify --config "$WORK/config.json" >/dev/null 2>&1 \
+  || fail "transit.key_version_baseline" "version-1 config failed before the decryption-floor change"
+pass "transit.key_version_baseline"
+printf '{"min_decryption_version":2}' > "$WORK/key-min-version-2.json"
+code="$(vault_api_status "$WORK/transit-config.token" POST transit/keys/nexaroute/config \
+  "$WORK/key-min-version-2.json" "$WORK/key-min-version-2-response.json")"
+case "$code" in 200|204) ;; *) fail "transit.key_version_configure" "expected successful Vault key-config update, got HTTP $code" ;; esac
+code="$(vault_api_status "$WORK/transit-config.token" GET transit/keys/nexaroute "" "$WORK/key-config-readback.json")"
+require_status "transit.key_version_config_readback" 200 "$code" "transit/keys/nexaroute read after decryption-floor change"
+[ "$(json_field "$WORK/key-config-readback.json" '.data.min_decryption_version')" = "2" ] \
+  || fail "transit.key_version_config_readback" "minimum decryption version did not become 2"
+if "$WORK/nexaroute" secrets verify --config "$WORK/config.json" >/dev/null 2>&1; then
+  fail "transit.key_version_unavailable" "config encrypted under unavailable key version 1 still verified"
+fi
+[ ! -e "$WORK/config.json.key" ] || fail "transit.key_version_unavailable" "a local .key file appeared after the unavailable-version failure"
+pass "transit.key_version_unavailable"
+
+printf '{"min_decryption_version":1}' > "$WORK/key-min-version-1.json"
+code="$(vault_api_status "$WORK/transit-config.token" POST transit/keys/nexaroute/config \
+  "$WORK/key-min-version-1.json" "$WORK/key-min-version-1-response.json")"
+case "$code" in 200|204) ;; *) fail "transit.key_version_restore" "expected successful Vault key-config restore, got HTTP $code" ;; esac
+code="$(vault_api_status "$WORK/transit-config.token" GET transit/keys/nexaroute "" "$WORK/key-config-restored.json")"
+require_status "transit.key_version_restore_readback" 200 "$code" "transit/keys/nexaroute read after restore"
+[ "$(json_field "$WORK/key-config-restored.json" '.data.min_decryption_version')" = "1" ] \
+  || fail "transit.key_version_restore_readback" "minimum decryption version was not restored to 1"
+"$WORK/nexaroute" secrets verify --config "$WORK/config.json" >/dev/null 2>&1 \
+  || fail "transit.key_version_restore" "version-1 config did not recover after the decryption floor was restored"
+pass "transit.key_version_restore"
+
 "$WORK/nexaroute" secrets rewrap-transit --config "$WORK/config.json" --dry-run > "$WORK/rewrap-dry.txt" 2>&1 \
   || fail "transit.rewrap_dry_run" "rewrap-transit --dry-run failed"
 grep -q "transit_key_versions=1" "$WORK/rewrap-dry.txt" || fail "transit.rewrap_dry_run" "dry run did not report the pre-rewrap version 1"
@@ -718,7 +871,7 @@ pass "transit.unavailable_fails"
 # Leak scan first: the summary must only be written once every check,
 # including this one, has been recorded. If it fails, fail() exits and
 # the EXIT trap writes the FAIL summary (check id/status only).
-for secret_file in "$WORK/kv.token" "$WORK/transit.token" "$WORK/rotate.token" "$WORK/legacy-key.b64"; do
+for secret_file in "$WORK/kv.token" "$WORK/transit.token" "$WORK/rotate.token" "$WORK/transit-config.token" "$WORK/legacy-key.b64"; do
   if [ -f "$secret_file" ] && grep -F -q "$(cat "$secret_file")" "$OUT_DIR"/* 2>/dev/null; then
     fail "hygiene.leak_scan" "a secret value was found in an output report"
   fi
@@ -729,6 +882,6 @@ fi
 pass "hygiene.leak_scan"
 
 log "DONE: reports in $OUT_DIR (vault-kv-acceptance.json, vault-runner-summary.json)"
-log "Evidence class is runner-loopback only. Do NOT cite this run as staging, HA, production, HSM, or tenant acceptance."
+log "Evidence class is $VAULT_EVIDENCE_CLASS only. Do NOT cite this run as staging, HA, production, HSM, or tenant acceptance."
 
 write_summary PASS 0 || fail "summary.write" "could not write $OUT_DIR/vault-runner-summary.json"

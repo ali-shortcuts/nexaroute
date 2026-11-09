@@ -19,14 +19,21 @@ import sys
 summary = json.load(open(sys.argv[1]))
 assert summary["outcome"] == "PASS", summary
 assert summary["exit_code"] == 0, summary
+assert summary["evidence_class"] == "self-test-no-vault", summary
+assert summary["revision"]["git_sha"], summary
+assert isinstance(summary["revision"]["worktree_clean"], bool), summary
 ids = {c["id"] for c in summary["checks"]}
 for required in (
     "selftest.success_summary",
     "selftest.failure_summary",
     "selftest.transit_key_contract",
+    "selftest.transit_runner_checks_present",
 ):
     assert required in ids, required
 assert all(set(c) == {"id", "status"} for c in summary["checks"])
+script = open("scripts/vault-runner-acceptance.sh").read()
+assert 'VAULT_EVIDENCE_CLASS="local-loopback"' in script
+assert 'address = "127.0.0.1:${VAULT_PORT}"' in script
 PY
 
 if grep -q 'require_status "vault.transit_key" 204' scripts/vault-runner-acceptance.sh; then
@@ -62,6 +69,13 @@ assert "sudo" not in body, body
 assert 'path "*"' not in body, body
 assert "auth/token/renew" not in body, body
 print("policy-accept least-privilege audit: PASS", token_paths)
+
+transit_cfg = re.search(r'cat > "\$WORK/policy-transit-config\.hcl" <<\'EOF\'\n(.*?)\nEOF', hcl, re.S)
+assert transit_cfg, "policy-transit-config.hcl block not found"
+cfg_paths = sorted(re.findall(r'path "([^"]+)"', transit_cfg.group(1)))
+assert cfg_paths == ["transit/keys/nexaroute", "transit/keys/nexaroute/config"], cfg_paths
+assert 'path "*"' not in transit_cfg.group(1), transit_cfg.group(1)
+print("policy-transit-config single-key audit: PASS", cfg_paths)
 PY
 if ! grep -q 'vault.token_survives_root_revoke" 200' scripts/vault-runner-acceptance.sh; then
   echo "vault-runner-acceptance self-test: FAIL no post-revocation lookup-self survival check" >&2
