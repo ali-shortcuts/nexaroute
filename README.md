@@ -5,7 +5,7 @@ clients across many LLM providers and models — most commonly
 **Claude Code -> NexaRoute -> Chat2API / other OpenAI-compatible or
 Anthropic-compatible providers**.
 
-Current release: **v0.24.0** — see [release notes](docs/releases/v0.24.0.md). The v0.25.0 draft is blocked; see the [completion checklist](docs/reports/FINAL_COMPLETION_CHECKLIST.md).
+Current release: **v0.24.0** — see [release notes](docs/releases/v0.24.0.md). The v0.25.0 draft is blocked; use the [current release-readiness reconciliation](docs/reports/RELEASE_READINESS_RECONCILIATION_2026-11-09.md) for the current Issue/evidence/CI status. The [completion checklist](docs/reports/FINAL_COMPLETION_CHECKLIST.md) is a historical owner handoff.
 
 ## Install / Update
 
