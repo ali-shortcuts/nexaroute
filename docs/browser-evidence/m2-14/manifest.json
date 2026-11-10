@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-05T19:56:52.018Z",
+  "generated_at": "2026-11-10T08:15:55.993Z",
   "base": "http://127.0.0.1:18741/",
   "shots": [
     {
@@ -808,7 +808,7 @@
       "theme": "light",
       "lang": "fa",
       "viewport": "desktop",
-      "sha256": "c03ea7eb89205e6852c5c1a3a3b75aa81786a10e90edc42a1abf5a0b944bb935"
+      "sha256": "3772c73cc836ebbac3babadd953eb5ad9a7b0450641eb0d673d16e9937a5f79a"
     },
     {
       "file": "light-fa-desktop/cost.png",
@@ -936,7 +936,7 @@
       "theme": "light",
       "lang": "fa",
       "viewport": "mobile",
-      "sha256": "ca7834db16875e3e56d935171c64cd8241c7970a8e20aef57ff3e9672aba5f38"
+      "sha256": "a5f548a35a680773f8c8decbbe8b6a75129099267d68da14665edce1ef06b3f1"
     },
     {
       "file": "light-fa-mobile/evals.png",
@@ -944,7 +944,7 @@
       "theme": "light",
       "lang": "fa",
       "viewport": "mobile",
-      "sha256": "26b1944237c9d5ca98047da523c3cdc8a9a21f34640337dd8f3e663e9233f3dc"
+      "sha256": "ca4578b1a8898be43543562106601de5180a33a2780ee05e4f2de49b25a99ba5"
     },
     {
       "file": "light-fa-mobile/observability.png",
