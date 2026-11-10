@@ -264,8 +264,11 @@ def build_config(base: dict, replica_id: str, listen: str, provider_base: str,
         "audit_max_events": 100000,
         "oidc": {"enabled": False},
     }
+    # S9 verifies synchronization of hard cooldown markers. ready_mesh uses
+    # local probe quarantine for upstream failures, which is intentionally not
+    # published as a shared cooldown.
     cfg["routing"] = {
-        "strategy": "ready_mesh",
+        "strategy": "adaptive_round_robin",
         "fallback_on_unknown_model": True,
         "session_affinity": True,
         "session_ttl_seconds": 3600,
@@ -1828,6 +1831,9 @@ def run_self_test() -> int:
 
     cfg_a = build_config({}, "replica-a", "0.0.0.0:8080", "http://stub:19091", "/d/a/video", "/d/a/sec", "k")
     cfg_b = build_config({}, "replica-b", "0.0.0.0:8080", "http://stub:19091", "/d/b/video", "/d/b/sec", "k")
+    check("HA breaker-sync scenario uses failure-threshold routing",
+          cfg_a["routing"]["strategy"] == "adaptive_round_robin",
+          cfg_a["routing"]["strategy"])
     diff = config_diff_keys(cfg_a, cfg_b)
     check("replica configs differ only in per-instance fields",
           all(d.startswith(("control_plane.breaker_sync_replica_id", "admin.security_store_path",
