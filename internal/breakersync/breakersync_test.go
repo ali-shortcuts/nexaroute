@@ -67,6 +67,29 @@ func TestSyncPropagatesCooldownAcrossReplicas(t *testing.T) {
 	}
 }
 
+func TestSyncPropagatesCooldownAfterRecordedFailures(t *testing.T) {
+	hmA, hmB, syncA, syncB := twoReplicas(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ { // twoReplicas configures a three-failure threshold.
+		hmA.RecordFailure("dep-threshold", "upstream 5xx", time.Second)
+	}
+	if got := hmA.Get("dep-threshold"); got.Status != health.Cooldown {
+		t.Fatalf("replica A status after threshold = %v, want cooldown", got.Status)
+	}
+	if err := syncA.SyncOnce(ctx); err != nil {
+		t.Fatalf("publish threshold cooldown: %v", err)
+	}
+	if err := syncB.SyncOnce(ctx); err != nil {
+		t.Fatalf("apply threshold cooldown: %v", err)
+	}
+	if got := hmB.Get("dep-threshold"); got.Status != health.Cooldown {
+		t.Fatalf("replica B status = %v, want cooldown", got.Status)
+	}
+	if got := hmB.Get("dep-threshold"); got.Failures != 0 || got.ConsecutiveFailures != 0 {
+		t.Fatalf("remote cooldown changed B's local failure accounting: %+v", got)
+	}
+}
+
 func TestSyncRemoteRetiredAppliesOnlyBoundedCooldown(t *testing.T) {
 	hmA, hmB, syncA, syncB := twoReplicas(t)
 	ctx := context.Background()
