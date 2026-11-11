@@ -161,7 +161,7 @@ Defaults:
 - 16 concurrent probes by default
 - 5 recovery attempts by default
 - 500 ms delay between failed recovery probes
-- 30-minute default recovery cooldown
+- 15-minute default probe recovery cooldown (`probe.recovery_cooldown_seconds`); the separate routing breaker cooldown defaults to 30 minutes (`routing.cooldown_seconds`)
 - every 120 seconds
 
 Manual `Probe all models` is the intentional exception: it can explicitly retest healthy deployments and returns a structured result including total, passed, failed, ready-skipped, cooldown-skipped, recovery-skipped and missing-adapter counts.
