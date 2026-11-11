@@ -12,9 +12,9 @@
 # PR-required gates are the checks that run on pull_request for this
 # repository (CI, Security, Coverage, Redis/real-system acceptance).
 # With --rc, the release-candidate-only gates are required too:
-# audit lint/staticcheck/gosec/deadcode (manual dispatch only) and
-# the 2h soak (manual dispatch only). Without --rc they are reported
-# as informational rows and do not pass or fail the PR gate.
+# audit lint/staticcheck/gosec/deadcode/extended fuzz, browser evidence,
+# and the 2h soak. Without --rc they are reported as informational rows
+# and do not pass or fail the PR gate.
 #
 # This script needs no local Go toolchain: it runs from any machine
 # with `gh` authenticated (or from a GitHub Actions runner), which is
@@ -190,6 +190,8 @@ rc_gates = [
     ("staticcheck", "Audit (manual): staticcheck"),
     ("gosec", "Audit (manual): gosec"),
     ("deadcode", "Audit (manual): deadcode"),
+    ("Extended fuzz", "Audit (manual): extended fuzz"),
+    ("evidence", "Browser evidence (main)"),
     ("soak", "Soak (manual): sustained run, 2h for a release candidate"),
 ]
 
