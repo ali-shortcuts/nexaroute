@@ -283,7 +283,7 @@ responses, hedge capability filtering, and Anthropic cache-usage reporting.
 PR #596 recorded the baseline and verification for that batch. Those fixes are
 present in `main` at `bfa93b6` and are not re-claimed here.
 
-## Dead code
+## Dead code — historical baseline, superseded below
 
 `deadcode -test ./...` reports four unreachable functions:
 
