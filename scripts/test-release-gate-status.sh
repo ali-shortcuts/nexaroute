@@ -194,9 +194,9 @@ print(json.dumps({"total_count": len(runs), "check_runs": runs}))' ;;
 import json
 names = ["verify","fuzz-smoke","ci-soak-smoke","integration-postgres",
  "integration-redis","container","Go vulnerability scan","CodeQL (Go)",
- "Fresh Go coverage","Two real Gateway processes against PostgreSQL",
- "Real Secret Service Store/Load",
- "golangci-lint","staticcheck","gosec","deadcode","soak"]
+	 "Fresh Go coverage","Two real Gateway processes against PostgreSQL",
+	 "Real Secret Service Store/Load",
+	 "golangci-lint","staticcheck","gosec","deadcode","Extended fuzz","evidence","soak"]
 print(json.dumps({"total_count": len(names),
   "check_runs": [{"name": n, "status": "completed", "conclusion": "success",
                   "details_url":"https://github.com/example/repo/actions/runs/1/job/2"} for n in names]}))' ;;
@@ -271,6 +271,8 @@ PYFIXTURE
 # --rc without a repo argument must not turn --rc into the repo.
 FAKE_GH_MODE=pass-rc bash scripts/release-gate-status.sh "$sha" --rc --soak-summary "$tmp/summary.json" > "$tmp/rc-arg.out" || { cat "$tmp/rc-arg.out"; exit 1; }
 grep -q "Release Gate Passed" "$tmp/rc-arg.out" || { cat "$tmp/rc-arg.out"; exit 1; }
+grep -qE '^Extended fuzz[[:space:]]+PASS' "$tmp/rc-arg.out" || { cat "$tmp/rc-arg.out"; exit 1; }
+grep -qE '^evidence[[:space:]]+PASS' "$tmp/rc-arg.out" || { cat "$tmp/rc-arg.out"; exit 1; }
 for mode in rc-pr rc-api-error rc-wrong-sha; do
   if FAKE_GH_MODE="$mode" bash scripts/release-gate-status.sh "$sha" --rc --soak-summary "$tmp/summary.json" > "$tmp/$mode.out" 2>&1; then
     echo "FAIL: RC accepted $mode provenance" >&2; exit 1
