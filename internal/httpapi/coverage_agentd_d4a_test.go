@@ -591,6 +591,7 @@ func (r *d4BlockingReadCloser) Close() error {
 func TestD4RoutingHelpers(t *testing.T) {
 	// readResponseBody with a nil context falls back to Background and
 	// returns the body.
+	//lint:ignore SA1012 This test intentionally verifies the documented nil-context fallback.
 	if got, err := readResponseBody(nil, io.NopCloser(strings.NewReader("hello")), 1024); err != nil || string(got) != "hello" {
 		t.Fatalf("readResponseBody(nil ctx)=%q err=%v, want hello/nil", got, err)
 	}

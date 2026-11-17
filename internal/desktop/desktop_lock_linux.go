@@ -26,7 +26,7 @@ func Acquire(path string) (*Lock, bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, false, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600) // #nosec G304 -- path is the operator's own --config flag plus ".lock" (cmd/gateway/main.go), made absolute before Acquire; a same-user single-instance lock file, never request data.
 	if err != nil {
 		return nil, false, err
 	}

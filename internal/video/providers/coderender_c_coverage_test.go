@@ -120,7 +120,7 @@ printf "fake-render-output" > "$last"
 
 // blockingNarrator writes a valid WAV and then leaves a directory where
 // the subtitle file goes, so the subtitle write must fail.
-type blockingNarrator struct{ fakeNarrator }
+type blockingNarrator struct{}
 
 func (blockingNarrator) Synthesize(_ context.Context, text, outPath string) error {
 	if err := (fakeNarrator{}).Synthesize(context.Background(), text, outPath); err != nil {

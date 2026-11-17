@@ -103,7 +103,7 @@ func parseBlock(raw string, line int) (string, block, error) {
 }
 
 func modulePath(root string) (string, error) {
-	f, err := os.Open(filepath.Join(root, "go.mod"))
+	f, err := os.Open(filepath.Join(root, "go.mod")) // #nosec G304 -- root is the operator's working directory and the filename is the constant "go.mod"; nothing attacker-controlled reaches this open.
 	if err != nil {
 		return "", fmt.Errorf("open go.mod: %w", err)
 	}
@@ -140,7 +140,7 @@ func sourcePath(root, module, profilePath string) (string, error) {
 }
 
 func readProfile(path string) (map[string][]block, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 G703 -- path is the coverage-profile argument the CI operator passes on the command line (os.Args[1]); sources named inside the profile are additionally confined to the module root by sourcePath before they are opened.
 	if err != nil {
 		return nil, fmt.Errorf("open coverage profile: %w", err)
 	}

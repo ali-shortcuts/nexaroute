@@ -73,7 +73,7 @@ func (s *d2FaultyNexaflowStore) RecordApproval(ctx context.Context, appr nexaflo
 }
 
 func (s *d2FaultyNexaflowStore) GetNodeExecutions(ctx context.Context, runID string) ([]nexaflow.NodeExecution, error) {
-	if run, err := s.MemoryStore.GetRun(ctx, runID); err == nil {
+	if run, err := s.GetRun(ctx, runID); err == nil {
 		if s.failOnCreated && run.State == nexaflow.RunCreated {
 			return nil, errors.New("d2 injected node executions failure")
 		}
