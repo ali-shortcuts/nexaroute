@@ -1,0 +1,96 @@
+# Durable single-replica PostgreSQL for the two-host HA drill.
+#
+# See deploy/ha/README.md for scope and limits. This StatefulSet
+# survives a Pod loss only when its PVC survives; it is NOT a
+# multi-replica PostgreSQL failover topology (no Patroni/repmgr).
+# The password comes from an operator-created Secret and is never
+# committed: kubectl -n nexaroute-ha create secret generic
+# nexaroute-ha-pg --from-literal=password=<from the secret manager>.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nexaroute-ha-pg
+  labels:
+    app: nexaroute-ha-pg
+spec:
+  serviceName: nexaroute-ha-pg
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexaroute-ha-pg
+  template:
+    metadata:
+      labels:
+        app: nexaroute-ha-pg
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: postgres
+          # Pinned to the image the repository already uses for
+          # PostgreSQL acceptance (CI and k8s-acceptance.sh).
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: nexaroute
+            - name: POSTGRES_DB
+              value: nexaroute
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nexaroute-ha-pg
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgres
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "nexaroute", "-d", "nexaroute"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              # subPath avoids the lost+found entry of a fresh
+              # volume breaking PostgreSQL startup.
+              subPath: pgdata
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            # Drill default size. Record the StorageClass and size
+            # in the drill evidence; the cluster default class is
+            # used unless the operator overrides storageClassName.
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexaroute-ha-pg
+  labels:
+    app: nexaroute-ha-pg
+spec:
+  type: ClusterIP
+  selector:
+    app: nexaroute-ha-pg
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres

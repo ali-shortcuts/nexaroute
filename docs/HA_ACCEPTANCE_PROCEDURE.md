@@ -176,6 +176,32 @@ Record a UTC timestamp at every step boundary.
    Scope that claim to established models only; a
    deployment needing a fresh probe during an outage
    was not tested.
+
+   Fail-back timing is a separate measurement from
+   recovery. After a failed provider recovery cycle
+   the gateway quarantines that provider for
+   `probe.recovery_cooldown_seconds` (default 900
+   seconds / 15 minutes; the default is pinned by
+   config tests and documented in
+   `docs/CONFIGURATION.md`), and no recovery probe
+   runs until the cooldown expires — so a provider
+   that returns quickly can still stay out of the
+   ready set for up to 15 minutes. A 2026-11-17
+   load-test run observed exactly this: no fail-back
+   within 2 minutes of a mock upstream returning.
+   The executable harness sets
+   `recovery_cooldown_seconds` to 5 seconds for
+   drill observability and records the drill config
+   in its evidence; a manual run with production
+   defaults must either wait out the cooldown and
+   record the measured fail-back time, or set a
+   drill value and record that it differs from
+   production. The admin API exposes
+   `cooldown_until` / `cooldown_active` read-only;
+   there is no force-readmit endpoint, so the only
+   other lever is a gateway restart (cooldown state
+   is in-memory and resets; record it as a restart,
+   never as a fail-back measurement).
 7. **Rolling upgrade.** With both replicas healthy on
    the old binary and sharing one database, replace
    one replica with the new binary (stop old, start
@@ -250,6 +276,14 @@ repeatable and its evidence is machine-readable. It never calls production.
   not converted into a partial pass. S9 (breaker-sync convergence) runs last
   in both modes; the authorization gate refuses two targets that resolve to
   the same host.
+- Fail-back timing is governed by the same cooldown:
+  the harness sets `probe.recovery_cooldown_seconds`
+  to 5 seconds in its drill configs so a recovered
+  provider re-enters the ready set inside the drill
+  window; production defaults keep it at 900 seconds.
+  A drill run must record which value it used, and a
+  manual run must measure fail-back separately from
+  recovery (see scenario 6).
 - Evidence is written under the requested in-repo directory as
   `evidence.json` (schema `nexaroute-ha-acceptance/1`) and `report.md`. The
   authorization document must name issue #652, the host list, the disposable
