@@ -392,11 +392,6 @@ func agentBArgTime(v driver.Value) time.Time {
 	return t
 }
 
-func agentBArgBool(v driver.Value) bool {
-	b, _ := v.(bool)
-	return b
-}
-
 func agentBArgTimePtr(v driver.Value) *time.Time {
 	if v == nil {
 		return nil
