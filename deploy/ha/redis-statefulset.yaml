@@ -1,0 +1,96 @@
+# Durable single-replica Redis for the two-host HA drill.
+#
+# See deploy/ha/README.md for scope and limits. AOF is enabled so
+# a restart replays the append-only file; this StatefulSet survives
+# a Pod loss only when its PVC survives. It is NOT a multi-replica
+# Redis failover topology (no Sentinel/Cluster).
+# --protected-mode no is set because the drill uses no password:
+# acceptable only on a private disposable network. Production
+# requires AUTH (requirepass) and a NetworkPolicy.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nexaroute-ha-redis
+  labels:
+    app: nexaroute-ha-redis
+spec:
+  serviceName: nexaroute-ha-redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexaroute-ha-redis
+  template:
+    metadata:
+      labels:
+        app: nexaroute-ha-redis
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: redis
+          # Pinned to the image the HA runner acceptance workflow
+          # already uses (redis:7.4.2-alpine).
+          image: redis:7.4.2-alpine
+          args:
+            - redis-server
+            - --appendonly
+            - "yes"
+            - --appendfsync
+            - everysec
+            - --save
+            - "900"
+            - "1"
+            - --save
+            - "300"
+            - "10"
+            - --protected-mode
+            - "no"
+          ports:
+            - containerPort: 6379
+              name: redis
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            # Drill default size. Record the StorageClass and size
+            # in the drill evidence; the cluster default class is
+            # used unless the operator overrides storageClassName.
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexaroute-ha-redis
+  labels:
+    app: nexaroute-ha-redis
+spec:
+  type: ClusterIP
+  selector:
+    app: nexaroute-ha-redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      name: redis
