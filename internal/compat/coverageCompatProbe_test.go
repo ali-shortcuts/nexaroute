@@ -171,17 +171,13 @@ func TestCoverageCompatProbeAnthropicCapabilityMatrix(t *testing.T) {
 	if calls.Load() != 9 || len(report.Outcomes) != 9 {
 		t.Fatalf("requests=%d outcomes=%d, want 9 each", calls.Load(), len(report.Outcomes))
 	}
-	if !report.OK || report.Passed != 7 || report.Failed != 0 || report.Inconclusive != 2 || report.TransportFail != 0 {
+	if !report.OK || report.Passed != 9 || report.Failed != 0 || report.Inconclusive != 0 || report.TransportFail != 0 {
 		t.Fatalf("Anthropic suite did not verify all capabilities: %+v", report)
 	}
 	for i, outcome := range report.Outcomes {
-		want := Supported
-		if i == 3 || i == 4 {
-			// The Anthropic verdict adapter currently verifies text only; tool
-			// blocks in the successful response remain inconclusive.
-			want = UnknownSupport
-		}
-		if outcome.Verdict != want {
+		// The tool specs (indices 3, 4) receive tool_use bodies and are
+		// judged on tool production, so every outcome is Supported.
+		if outcome.Verdict != Supported {
 			t.Errorf("Anthropic outcome[%d] %s=%v detail=%q", i, outcome.Capability, outcome.Verdict, outcome.Detail)
 		}
 	}
@@ -244,7 +240,7 @@ func TestCoverageCompatProbeAnthropicFailuresAndVerdicts(t *testing.T) {
 				}
 				return UnknownSupport, "no text"
 			}
-			out, err := runProbeAnthropic(context.Background(), transport, []byte(`{"model":"m"}`), tc.name == "stream without SSE" || tc.name == "stream with SSE", CapTemperature, verdict)
+			out, err := runProbeAnthropic(context.Background(), transport, []byte(`{"model":"m"}`), tc.name == "stream without SSE" || tc.name == "stream with SSE", CapTemperature, ExpectText, verdict)
 			if (err != nil) != tc.wantErr || out.Verdict != tc.want {
 				t.Fatalf("outcome=%+v err=%v, want verdict=%v err=%v", out, err, tc.want, tc.wantErr)
 			}
@@ -259,7 +255,7 @@ func TestCoverageCompatProbeAnthropicFailuresAndVerdicts(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
-	out, err := runProbeAnthropic(ctx, transport, []byte(`{"model":"m"}`), false, CapText, func([]byte, ToolExpectation) (Support, string) {
+	out, err := runProbeAnthropic(ctx, transport, []byte(`{"model":"m"}`), false, CapText, ExpectText, func([]byte, ToolExpectation) (Support, string) {
 		return Supported, "unexpected response"
 	})
 	if err == nil || out.Verdict != UnknownSupport || !strings.Contains(out.Detail, "transport:") {
