@@ -432,21 +432,20 @@ func TestMission95ProbeSuites(t *testing.T) {
 		mission95ProbeResp(200, anthText, false),
 		mission95ProbeResp(200, anthText, false),
 	}}
-	// NOTE: runProbeAnthropic always passes ExpectText to the verdict
-	// function, so the tool specs are judged on text presence, not
-	// tool production: a tool_use-only body counts as inconclusive
-	// ("200 without text content"), while a text body passes the
-	// tool specs. The verdict's ExpectToolCall branch is unreachable
-	// through this path and is left uncovered deliberately.
+	// runProbeAnthropic passes each spec's expectation to the verdict
+	// function, so the tool specs are judged on tool production: a
+	// tool_use-only body counts as a pass ("tool call produced"), while
+	// a text-only body on a tool spec is inconclusive ("200 without a
+	// tool call").
 	rep = RunCapabilitySuiteAnthropic(ctx, ft, "dep", "model")
-	if !rep.OK || rep.Passed != 7 || rep.Inconclusive != 2 || len(rep.Outcomes) != 9 {
+	if !rep.OK || rep.Passed != 9 || rep.Inconclusive != 0 || len(rep.Outcomes) != 9 {
 		t.Fatalf("anthropic suite: %+v", rep)
 	}
-	if rep.Outcomes[3].Detail != "200 without text content" {
+	if rep.Outcomes[3].Detail != "tool call produced" {
 		t.Fatalf("anthropic tool spec: %+v", rep.Outcomes[3])
 	}
 	// Anthropic verdict edges through the suite: unparseable text body,
-	// text-less body, text body on the tool spec (passes: see note).
+	// text-less body, text body on the tool spec (inconclusive: no tool call).
 	ft = &fakeTransport{resps: []fakeResp{
 		mission95ProbeResp(200, `{bad`, false),
 		mission95ProbeResp(200, `{}`, false),
@@ -459,7 +458,7 @@ func TestMission95ProbeSuites(t *testing.T) {
 		mission95ProbeResp(200, anthText, false),
 	}}
 	rep = RunCapabilitySuiteAnthropic(ctx, ft, "dep", "model")
-	if rep.Passed != 7 || rep.Inconclusive != 2 || rep.Outcomes[0].Detail != "unparseable anthropic body" || rep.Outcomes[1].Detail != "200 without text content" || rep.Outcomes[3].Detail != "generation verified" {
+	if rep.Passed != 5 || rep.Inconclusive != 4 || rep.Outcomes[0].Detail != "unparseable anthropic body" || rep.Outcomes[1].Detail != "200 without text content" || rep.Outcomes[3].Detail != "200 without a tool call" {
 		t.Fatalf("anthropic edges: %+v", rep.Outcomes)
 	}
 	// runProbeAnthropic direct branches.
@@ -472,30 +471,30 @@ func TestMission95ProbeSuites(t *testing.T) {
 		mission95ProbeResp(200, `data: x`, true),
 		mission95ProbeResp(200, `{}`, false),
 	}}
-	out, err := runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapTools, verdict)
+	out, err := runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapTools, ExpectToolCall, verdict)
 	if err != nil || out.Verdict != Unsupported {
 		t.Fatalf("anth cap: %+v %v", out, err)
 	}
-	out, err = runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapText, verdict)
+	out, err = runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapText, ExpectText, verdict)
 	if err != nil || out.Verdict != UnknownSupport || !strings.Contains(out.Detail, "probe inconclusive") {
 		t.Fatalf("anth context: %+v %v", out, err)
 	}
-	if _, err := runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapText, verdict); err == nil {
+	if _, err := runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapText, ExpectText, verdict); err == nil {
 		t.Fatalf("anth other non-2xx should error")
 	}
-	out, _ = runProbeAnthropic(ctx, ft, []byte(`{}`), true, CapStreaming, verdict)
+	out, _ = runProbeAnthropic(ctx, ft, []byte(`{}`), true, CapStreaming, ExpectText, verdict)
 	if out.Verdict != UnknownSupport {
 		t.Fatalf("anth stream ct: %+v", out)
 	}
-	out, err = runProbeAnthropic(ctx, ft, []byte(`{}`), true, CapStreaming, verdict)
+	out, err = runProbeAnthropic(ctx, ft, []byte(`{}`), true, CapStreaming, ExpectText, verdict)
 	if err != nil || out.Verdict != Supported || out.Detail != "SSE headers verified" {
 		t.Fatalf("anth stream ok: %+v %v", out, err)
 	}
-	out, err = runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapText, verdict)
+	out, err = runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapText, ExpectText, verdict)
 	if err != nil || out.Verdict != Supported {
 		t.Fatalf("anth verdict passthrough: %+v %v", out, err)
 	}
-	if _, err := runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapText, verdict); err == nil {
+	if _, err := runProbeAnthropic(ctx, ft, []byte(`{}`), false, CapText, ExpectText, verdict); err == nil {
 		t.Fatalf("anth transport error expected")
 	}
 	// Gemini suite: 11 specs.

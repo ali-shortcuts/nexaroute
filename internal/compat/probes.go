@@ -816,7 +816,7 @@ func RunCapabilitySuiteAnthropic(ctx context.Context, t ProbeTransport, deployme
 		}
 	}
 	for _, spec := range specs {
-		out, err := runProbeAnthropic(ctx, t, spec.payload, spec.stream, spec.capability, anthVerdict)
+		out, err := runProbeAnthropic(ctx, t, spec.payload, spec.stream, spec.capability, spec.expect, anthVerdict)
 		switch {
 		case err != nil:
 			report.TransportFail++
@@ -837,7 +837,7 @@ func RunCapabilitySuiteAnthropic(ctx context.Context, t ProbeTransport, deployme
 
 // runProbeAnthropic mirrors runProbe with an Anthropic-shaped 2xx verdict
 // function; failure classification flows through the same classifier.
-func runProbeAnthropic(ctx context.Context, t ProbeTransport, payload []byte, stream bool, capability string, verdict func([]byte, ToolExpectation) (Support, string)) (ProbeOutcome, error) {
+func runProbeAnthropic(ctx context.Context, t ProbeTransport, payload []byte, stream bool, capability string, expect ToolExpectation, verdict func([]byte, ToolExpectation) (Support, string)) (ProbeOutcome, error) {
 	out := ProbeOutcome{Capability: capability, Verdict: UnknownSupport}
 	start := time.Now()
 	defer func() { out.LatencyMS = time.Since(start).Milliseconds() }()
@@ -870,7 +870,7 @@ func runProbeAnthropic(ctx context.Context, t ProbeTransport, payload []byte, st
 		out.Detail = "SSE headers verified"
 		return out, nil
 	}
-	out.Verdict, out.Detail = verdict(body, ExpectText)
+	out.Verdict, out.Detail = verdict(body, expect)
 	return out, nil
 }
 

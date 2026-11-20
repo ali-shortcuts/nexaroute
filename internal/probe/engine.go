@@ -564,9 +564,11 @@ func (e *Engine) processRecoveryTask(ctx context.Context, task recoveryTask) {
 		}
 		e.hm.SetNextRetry(task.id, time.Now().Add(wait))
 		e.bus.Add(events.Event{Kind: "recovery_deferred", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status, ErrorType: string(classRateLimited)})
-		if status == http.StatusTooManyRequests {
-			e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status, ErrorType: string(classRateLimited)})
-		}
+		// A RetryAfter error is itself a rate-limit signal: Probe returns
+		// status 0 for Do errors, so gating this emit on status == 429
+		// could never fire from this branch. Emit unconditionally on the
+		// deferral path, with the same StatusCode as recovery_deferred.
+		e.bus.Add(events.Event{Kind: "provider_rate_limited", Deployment: task.id, Message: fmt.Sprintf("credential rate-limit cooldown; retry after %s", wait), StatusCode: status, ErrorType: string(classRateLimited)})
 		e.scheduleRecovery(ctx, task, wait)
 		return
 	}
