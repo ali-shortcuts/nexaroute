@@ -122,11 +122,14 @@ Issue: #652 (HA acceptance: multi-host PostgreSQL/Redis failover and recovery).
 - Restored counts in `nexaroute_restored` MATCH baseline exactly:
   video_jobs 1, snapshots 1.
 
-### S12 short bounded soak — PARTIAL (~30/60 samples, all HTTP 200)
+### S12 short bounded soak — PASS (60/60 samples, all HTTP 200)
 
-- Healthz polled every 5s; ~30 consecutive HTTP 200 responses, then the
-  Killercoda playground session expired ("reconnect") at ~06:56 +0430
-  before the 60th sample. Recorded as PARTIAL, not a pass.
+- Healthz polled every 5s for 5 minutes through the Service port-forward;
+  60 consecutive HTTP 200 responses, 0 failures.
+- First attempt (foreground loop) was interrupted by a terminal disconnect
+  after ~30 consecutive 200s; the re-run used a background loop logging
+  each result to a file (`/tmp/soak12.log`) so the count survived the
+  terminal clearing its on-screen output.
 - The validated 2h soak for this commit from CI (run 44748356175:
   7424s, 10/10 stages, 28,802 samples) remains the long-soak evidence.
 
@@ -148,8 +151,8 @@ All scenarios through S11 PASS with measured RPO/RTO on the durable
 two-worker topology (commit 1ba0a324): baseline green; replica kill
 RTO ≈ 13s; PostgreSQL Pod loss RTO ≈ 6s, RPO 0, gateway reconnected
 without restart; Redis Pod loss RTO ≈ 8s, chat still 200; pg_dump
-restore row counts match baseline exactly. S12 short soak PARTIAL
-(~30/60 samples, all 200, session expired). Two-independent-hosts +
+restore row counts match baseline exactly. S12 short soak PASS
+(60/60 samples, all 200). Two-independent-hosts +
 load-balancer failover remains NOT_MEASURED (single playground host);
 multi-replica PostgreSQL/Redis failover remains NOT_MEASURED (owner
 decision pending). Within those stated bounds, the durable two-worker
